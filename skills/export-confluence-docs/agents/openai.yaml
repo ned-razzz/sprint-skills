@@ -1,0 +1,4 @@
+interface:
+  display_name: "Export Confluence Docs"
+  short_description: "Export Confluence docs and draw.io diagrams"
+  default_prompt: "Use $export-confluence-docs to export selected Confluence design pages into ./docs, convert linked draw.io XML into Mermaid, and rewrite the Markdown sections."
