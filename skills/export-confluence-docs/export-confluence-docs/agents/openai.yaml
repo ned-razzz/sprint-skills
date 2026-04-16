@@ -1,0 +1,9 @@
+interface:
+  display_name: "Export Confluence Docs"
+  short_description: "Export Confluence docs with ADF-aware draw.io handling"
+  default_prompt: "Use $export-confluence-docs to inspect the configured Confluence pages via Atlassian MCP, export them with draw.io-aware staging into ./docs and /tmp/export-confluence-docs, and rewrite any diagram sections as Mermaid."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "atlassian"
+      description: "Atlassian MCP server for Confluence page discovery and ADF inspection"
