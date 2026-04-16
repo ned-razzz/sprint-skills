@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import textwrap
@@ -29,6 +30,33 @@ render_doc = load_module("render_mermaid_doc", SCRIPTS_DIR / "render_mermaid_doc
 
 
 class ExportConfluenceDocsTests(unittest.TestCase):
+    def test_load_config_resolves_relative_output_dir_from_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "baseUrl": "https://example.atlassian.net/wiki",
+                        "titles": ["System Architecture"],
+                        "spaceKey": "ADP",
+                        "outputDir": "./docs/exported",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(tmp_path)
+                config = bundle.load_config(str(config_path))
+            finally:
+                os.chdir(previous_cwd)
+
+            self.assertEqual(config.base_url, "https://example.atlassian.net/wiki")
+            self.assertEqual(config.titles, ["System Architecture"])
+            self.assertEqual(config.space_key, "ADP")
+            self.assertEqual(config.output_dir, tmp_path / "docs" / "exported")
+
     def test_normalized_xml_filename_prefers_diagram_slug(self) -> None:
         self.assertEqual(
             bundle.normalized_xml_filename("Hardware Architecture", "My Diagram.drawio"),

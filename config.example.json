@@ -1,0 +1,10 @@
+{
+    "titles": [
+        "System Architecture",
+        "System Requirements",
+        "State Machine Diagram",
+        "Directory Structure"
+    ],
+    "spaceKey": "ADP",
+    "outputDir": "./docs"
+}
