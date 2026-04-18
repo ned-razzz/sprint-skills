@@ -2,7 +2,7 @@
 
 Use this skill with repositories that provide a current working directory `config.json` describing the Confluence titles to export and the final Markdown output directory.
 
-Assume the page body and draw.io attachments were retrieved through Atlassian MCP before these repository layout rules are applied.
+Assume the page body was retrieved through Atlassian MCP and the draw.io attachment bytes were downloaded locally from attachment metadata before these repository layout rules are applied.
 
 ## Export Layout
 
@@ -11,7 +11,7 @@ Assume the page body and draw.io attachments were retrieved through Atlassian MC
 - Final Markdown documents live at `<outputDir>/*.md`, where `outputDir` comes from `config.json`.
 - Each exported document includes `confluence_page_id` in YAML front matter.
 - Temporary XML lives at `/tmp/export-confluence-docs/<markdown-stem>--<confluence_page_id>/`.
-- XML files come from draw.io attachments downloaded through Atlassian MCP.
+- XML files come from draw.io attachments discovered through Atlassian MCP metadata and downloaded directly with Confluence credentials.
 - XML files are normalized to `<diagram-slug>.xml` when the Confluence macro exposes `diagramName`.
 - If `config.json` is missing or invalid, surface that condition before using any fallback manual export flow.
 

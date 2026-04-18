@@ -522,6 +522,13 @@ def download_path_of_attachment(attachment: dict[str, Any]) -> str:
     return str(download or "")
 
 
+def build_attachment_download_url(base_url: str, attachment: dict[str, Any]) -> str:
+    download_path = download_path_of_attachment(attachment)
+    if not download_path:
+        return ""
+    return urljoin(site_root(base_url), download_path)
+
+
 def attachment_match_score(attachment: dict[str, Any], diagram_name: str) -> int:
     title = str(attachment.get("title") or "").strip()
     if not title:
@@ -1029,6 +1036,7 @@ def export_drawio_xml(
                     "attachmentTitle": str(attachment.get("title") or ""),
                     "attachmentId": attachment_id,
                     "ownerPageId": owner_page_id,
+                    "downloadUrl": build_attachment_download_url(client.base_url, attachment),
                     "path": str(output_path),
                     "xml": output_path.name,
                     "source": reference.source,
@@ -1058,6 +1066,7 @@ def export_drawio_xml(
                     "attachmentTitle": title,
                     "attachmentId": attachment_id,
                     "ownerPageId": page_id,
+                    "downloadUrl": build_attachment_download_url(client.base_url, attachment),
                     "path": str(output_path),
                     "xml": output_path.name,
                     "source": "attachment-fallback",

@@ -69,6 +69,37 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             "hardware-architecture.xml",
         )
 
+    def test_build_attachment_download_url_uses_site_root(self) -> None:
+        attachment = {"_links": {"download": "/download/attachments/123/hwa.drawio?api=v2"}}
+        self.assertEqual(
+            bundle.build_attachment_download_url(
+                "https://example.atlassian.net/wiki",
+                attachment,
+            ),
+            "https://example.atlassian.net/download/attachments/123/hwa.drawio?api=v2",
+        )
+
+    def test_build_attachment_download_url_returns_empty_string_without_link(self) -> None:
+        self.assertEqual(
+            bundle.build_attachment_download_url(
+                "https://example.atlassian.net/wiki",
+                {"id": "123"},
+            ),
+            "",
+        )
+
+    def test_require_credentials_fails_without_env_vars(self) -> None:
+        previous_email = os.environ.pop("CONFLUENCE_EMAIL", None)
+        previous_token = os.environ.pop("CONFLUENCE_API_TOKEN", None)
+        try:
+            with self.assertRaises(bundle.ConfigError):
+                bundle.require_credentials()
+        finally:
+            if previous_email is not None:
+                os.environ["CONFLUENCE_EMAIL"] = previous_email
+            if previous_token is not None:
+                os.environ["CONFLUENCE_API_TOKEN"] = previous_token
+
     def test_drawio_macro_renders_placeholder(self) -> None:
         converter = bundle.StorageToMarkdownConverter([])
         storage = textwrap.dedent(
@@ -127,6 +158,87 @@ class ExportConfluenceDocsTests(unittest.TestCase):
         self.assertEqual(len(references), 1)
         self.assertEqual(references[0].diagram_name, "state_diagram.drawio")
         self.assertEqual(references[0].owner_page_id, "52166707")
+
+    def test_export_drawio_xml_includes_download_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            temp_xml_dir = tmp_path / "system-architecture--32243721"
+            temp_xml_dir.mkdir()
+
+            class StubClient:
+                base_url = "https://example.atlassian.net/wiki"
+
+                def list_attachments(self, page_id: str):
+                    return [
+                        {
+                            "id": "att-1",
+                            "title": "HWA.drawio",
+                            "metadata": {"mediaType": "application/vnd.jgraph.mxfile"},
+                            "_links": {"download": "/download/attachments/32243721/HWA.drawio"},
+                        }
+                    ]
+
+                def download_attachment(self, download_path: str):
+                    self.last_download_path = download_path
+                    return b"<mxGraphModel><root/></mxGraphModel>"
+
+            client = StubClient()
+            saved, warnings = bundle.export_drawio_xml(
+                client=client,
+                references=[
+                    bundle.DiagramReference(
+                        diagram_name="HWA",
+                        owner_page_id="32243721",
+                        source="structured-macro:drawio",
+                    )
+                ],
+                page_id="32243721",
+                temp_xml_dir=temp_xml_dir,
+                attachment_cache={},
+            )
+
+            self.assertEqual(warnings, [])
+            self.assertEqual(saved[0]["downloadUrl"], "https://example.atlassian.net/download/attachments/32243721/HWA.drawio")
+            self.assertEqual(client.last_download_path, "/download/attachments/32243721/HWA.drawio")
+
+    def test_export_drawio_xml_warns_when_download_link_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            temp_xml_dir = tmp_path / "system-architecture--32243721"
+            temp_xml_dir.mkdir()
+
+            class StubClient:
+                base_url = "https://example.atlassian.net/wiki"
+
+                def list_attachments(self, page_id: str):
+                    return [
+                        {
+                            "id": "att-1",
+                            "title": "HWA.drawio",
+                            "metadata": {"mediaType": "application/vnd.jgraph.mxfile"},
+                            "_links": {},
+                        }
+                    ]
+
+            saved, warnings = bundle.export_drawio_xml(
+                client=StubClient(),
+                references=[
+                    bundle.DiagramReference(
+                        diagram_name="HWA",
+                        owner_page_id="32243721",
+                        source="structured-macro:drawio",
+                    )
+                ],
+                page_id="32243721",
+                temp_xml_dir=temp_xml_dir,
+                attachment_cache={},
+            )
+
+            self.assertEqual(saved, [])
+            self.assertEqual(
+                warnings,
+                ["attachment download link missing for 'HWA' (ownerPageId=32243721)"],
+            )
 
     def test_map_doc_uses_placeholder_slug(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,6 +306,59 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             for section in sections:
                 rendered += section["heading_line"] + "\n" + render_doc.strip_drawio_placeholder(section["body"])
             self.assertIn("```mermaid", rendered)
+            self.assertNotIn("confluence-drawio", rendered)
+
+    def test_render_mermaid_doc_replaces_each_placeholder_by_matching_drawio_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            doc = tmp_path / "system-architecture.md"
+            doc.write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    confluence_page_id: "32243721"
+                    ---
+
+                    # Hardware
+                    <!-- confluence-drawio diagram="HWA.drawio" diagram_slug="hwa" owner_page_id="32243721" source="structured-macro:drawio" -->
+
+                    # Software
+                    <!-- confluence-drawio diagram="SAS.drawio" diagram_slug="sas" owner_page_id="32243721" source="structured-macro:drawio" -->
+                    """
+                ),
+                encoding="utf-8",
+            )
+            diagram_json = tmp_path / "diagram.json"
+            diagram_json.write_text(
+                json.dumps(
+                    {
+                        "diagrams": [
+                            {"xml": "sas.xml", "mermaid": "flowchart TB\n  soft_a --> soft_b"},
+                            {"xml": "hwa.xml", "mermaid": "flowchart TB\n  hard_a --> hard_b"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "render_mermaid_doc.py"),
+                    "--doc",
+                    str(doc),
+                    "--diagram-json",
+                    str(diagram_json),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            rendered = doc.read_text(encoding="utf-8")
+            self.assertIn("# Hardware\n```mermaid\nflowchart TB\n  hard_a --> hard_b\n```", rendered)
+            self.assertIn("# Software\n```mermaid\nflowchart TB\n  soft_a --> soft_b\n```", rendered)
             self.assertNotIn("confluence-drawio", rendered)
 
     def test_extract_drawio_ir_reports_connected_unlabeled_vertices(self) -> None:

@@ -10,7 +10,11 @@ from pathlib import Path
 
 HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$", re.MULTILINE)
 MERMAID_FENCE = "```mermaid"
-DRAWIO_PLACEHOLDER_RE = re.compile(r'<!--\s*confluence-drawio\b.*?-->\s*', re.IGNORECASE | re.DOTALL)
+DRAWIO_PLACEHOLDER_RE = re.compile(
+    r'<!--\s*confluence-drawio\b(?P<attrs>.*?)-->\s*',
+    re.IGNORECASE | re.DOTALL,
+)
+ATTR_RE = re.compile(r'([a-zA-Z0-9_:-]+)="([^"]*)"')
 
 
 def preferred_xml_for_heading(heading: str, pending_xml_names: list[str]) -> str | None:
@@ -94,6 +98,45 @@ def strip_drawio_placeholder(body: str) -> str:
     return stripped.lstrip("\n")
 
 
+def placeholder_attrs(text: str) -> list[dict[str, str]]:
+    attrs_list: list[dict[str, str]] = []
+    for match in DRAWIO_PLACEHOLDER_RE.finditer(text):
+        attrs = {key: value for key, value in ATTR_RE.findall(match.group("attrs"))}
+        if attrs:
+            attrs_list.append(attrs)
+    return attrs_list
+
+
+def match_placeholder_to_xml(attrs: dict[str, str], pending_xml_names: list[str]) -> str | None:
+    diagram_slug = attrs.get("diagram_slug", "").casefold()
+    diagram_name = attrs.get("diagram", "").casefold()
+    xml_by_stem = {Path(xml_name).stem.casefold(): xml_name for xml_name in pending_xml_names}
+    if diagram_slug and diagram_slug in xml_by_stem:
+        return xml_by_stem[diagram_slug]
+    if diagram_name and diagram_name in xml_by_stem:
+        return xml_by_stem[diagram_name]
+    return None
+
+
+def render_placeholder_blocks(text: str, diagrams_by_xml: dict[str, dict]) -> str:
+    pending_xml_names = list(diagrams_by_xml.keys())
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal pending_xml_names
+        attrs = {key: value for key, value in ATTR_RE.findall(match.group("attrs"))}
+        xml_name = match_placeholder_to_xml(attrs, pending_xml_names)
+        if xml_name is None and len(pending_xml_names) == 1:
+            xml_name = pending_xml_names[0]
+        if xml_name is None:
+            diagram_name = attrs.get("diagram") or attrs.get("diagram_slug") or "unknown"
+            raise ValueError(f"no diagram payload available for placeholder '{diagram_name}'")
+        diagram = diagrams_by_xml[xml_name]
+        pending_xml_names.remove(xml_name)
+        return f"```mermaid\n{diagram['mermaid'].rstrip()}\n```\n"
+
+    return DRAWIO_PLACEHOLDER_RE.sub(replace, text)
+
+
 def main() -> int:
     try:
         args = parse_args()
@@ -104,31 +147,30 @@ def main() -> int:
         preamble = body[: body.find(sections[0]["heading_line"])] if sections else body
         raw_json = sys.stdin.read() if args.diagram_json == "-" else Path(args.diagram_json).read_text(encoding="utf-8")
         diagrams_by_xml = load_diagrams(json.loads(raw_json))
+        if "confluence-drawio" in body.lower():
+            rendered_body = render_placeholder_blocks(body, diagrams_by_xml)
+            rendered = front_matter + rendered_body
+        else:
+            pending_xml_names = list(diagrams_by_xml.keys())
+            for section in sections:
+                lowered = section["body"].lower()
+                if "confluence-drawio" not in lowered and MERMAID_FENCE not in lowered:
+                    continue
+                xml_name = section_xml_hint(section["body"], pending_xml_names)
+                if xml_name is None:
+                    xml_name = preferred_xml_for_heading(section["heading"], pending_xml_names)
+                if xml_name is None and pending_xml_names:
+                    xml_name = pending_xml_names[0]
+                if xml_name is None:
+                    raise ValueError(f"no diagram payload available for section '{section['heading']}'")
+                diagram = diagrams_by_xml[xml_name]
+                section["body"] = f"```mermaid\n{diagram['mermaid'].rstrip()}\n```\n"
+                pending_xml_names.remove(xml_name)
 
-        pending_xml_names = list(diagrams_by_xml.keys())
-        for section in sections:
-            lowered = section["body"].lower()
-            if "confluence-drawio" not in lowered and MERMAID_FENCE not in lowered:
-                continue
-            xml_name = section_xml_hint(section["body"], pending_xml_names)
-            if xml_name is None:
-                xml_name = preferred_xml_for_heading(section["heading"], pending_xml_names)
-            if xml_name is None and pending_xml_names:
-                xml_name = pending_xml_names[0]
-            if xml_name is None:
-                raise ValueError(f"no diagram payload available for section '{section['heading']}'")
-            diagram = diagrams_by_xml[xml_name]
-            section["body"] = f"```mermaid\n{diagram['mermaid'].rstrip()}\n```\n"
-            pending_xml_names.remove(xml_name)
-            if "confluence-drawio" in lowered:
-                section["body"] = section["body"]
-            else:
-                section["body"] = section["body"]
-
-        rendered = front_matter + preamble
-        for section in sections:
-            body_text = strip_drawio_placeholder(section["body"])
-            rendered += section["heading_line"] + "\n" + body_text
+            rendered = front_matter + preamble
+            for section in sections:
+                body_text = strip_drawio_placeholder(section["body"])
+                rendered += section["heading_line"] + "\n" + body_text
         if not rendered.endswith("\n"):
             rendered += "\n"
 
