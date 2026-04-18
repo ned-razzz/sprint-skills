@@ -1,3 +1,4 @@
 .codex
 docs
 config.json
+__pycache__

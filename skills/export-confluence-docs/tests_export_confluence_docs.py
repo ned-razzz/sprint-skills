@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -26,10 +27,15 @@ def load_module(name: str, path: Path):
 
 bundle = load_module("export_confluence_bundle", SCRIPTS_DIR / "export_confluence_bundle.py")
 map_doc = load_module("map_doc_drawio", SCRIPTS_DIR / "map_doc_drawio.py")
+extract_ir = load_module("extract_drawio_ir", SCRIPTS_DIR / "extract_drawio_ir.py")
+render_mermaid = load_module("render_drawio_mermaid", SCRIPTS_DIR / "render_drawio_mermaid.py")
 render_doc = load_module("render_mermaid_doc", SCRIPTS_DIR / "render_mermaid_doc.py")
 
 
 class ExportConfluenceDocsTests(unittest.TestCase):
+    def write_xml(self, path: Path, body: str) -> None:
+        path.write_text(textwrap.dedent(body).strip() + "\n", encoding="utf-8")
+
     def test_load_config_resolves_relative_output_dir_from_cwd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -189,6 +195,244 @@ class ExportConfluenceDocsTests(unittest.TestCase):
                 rendered += section["heading_line"] + "\n" + render_doc.strip_drawio_placeholder(section["body"])
             self.assertIn("```mermaid", rendered)
             self.assertNotIn("confluence-drawio", rendered)
+
+    def test_extract_drawio_ir_reports_connected_unlabeled_vertices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            xml_path = tmp_path / "bad.xml"
+            self.write_xml(
+                xml_path,
+                """
+                <mxGraphModel>
+                  <root>
+                    <mxCell id="0" />
+                    <mxCell id="1" parent="0" />
+                    <mxCell id="n1" value="Gateway" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="20" y="20" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n2" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="220" y="20" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e1" edge="1" source="n1" target="n2" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                  </root>
+                </mxGraphModel>
+                """,
+            )
+
+            payload = extract_ir.extract_ir(xml_path)
+
+            self.assertEqual(payload["issues"]["connected_unlabeled_vertices"][0]["id"], "n2")
+            self.assertEqual(payload["issues"]["unsupported_edges"][0]["reason"], "edge references an unlabeled vertex")
+
+    def test_render_drawio_mermaid_renders_architecture_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            xml_dir = tmp_path / "xml"
+            xml_dir.mkdir()
+            xml_path = xml_dir / "hwa.xml"
+            self.write_xml(
+                xml_path,
+                """
+                <mxGraphModel>
+                  <root>
+                    <mxCell id="0" />
+                    <mxCell id="1" parent="0" />
+                    <mxCell id="c1" value="Edge Cluster" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="20" y="20" width="360" height="360" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n1" value="Camera" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="60" y="80" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n2" value="Camera" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="220" y="80" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n3" value="API Service" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="140" y="180" width="140" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n4" value="Message DB" style="shape=cylinder3;" vertex="1" parent="1">
+                      <mxGeometry x="140" y="280" width="140" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n5" value="Operator Console" style="ellipse;" vertex="1" parent="1">
+                      <mxGeometry x="440" y="180" width="160" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="t1" value="UI" style="text;" vertex="1" parent="1">
+                      <mxGeometry x="20" y="0" width="60" height="20" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e1" value="RTSP" edge="1" source="n1" target="n3" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e2" edge="1" source="n2" target="n3" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e3" value="TCP" edge="1" source="n3" target="n4" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e4" value="HTTPS" edge="1" source="n5" target="n3" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                  </root>
+                </mxGraphModel>
+                """,
+            )
+            mapping = {
+                "document": {"xml_dir": str(xml_dir)},
+                "sections": [{"heading": "Hardware", "xml": "hwa.xml", "mode": "placeholder"}],
+                "xml_files": ["hwa.xml"],
+            }
+
+            payload = render_mermaid.build_diagram_payload(mapping)
+
+            self.assertEqual(
+                payload["diagrams"][0]["mermaid"],
+                textwrap.dedent(
+                    """\
+                    flowchart TB
+                      subgraph sg_edge_cluster["Edge Cluster"]
+                        camera["Camera"]
+                        camera_2["Camera"]
+                        api_service["API Service"]
+                        message_db[("Message DB")]
+                      end
+                      operator_console(("Operator Console"))
+                      api_service -->|TCP| message_db
+                      camera -->|RTSP| api_service
+                      camera_2 --> api_service
+                      operator_console -->|HTTPS| api_service"""
+                ),
+            )
+            self.assertNotIn("UI", payload["diagrams"][0]["mermaid"])
+
+    def test_render_drawio_mermaid_end_to_end_replaces_placeholder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            doc = tmp_path / "system-architecture.md"
+            xml_dir = tmp_path / "system-architecture--32243721"
+            xml_dir.mkdir()
+            self.write_xml(
+                xml_dir / "hwa.xml",
+                """
+                <mxGraphModel>
+                  <root>
+                    <mxCell id="0" />
+                    <mxCell id="1" parent="0" />
+                    <mxCell id="n1" value="Gateway" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="20" y="20" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n2" value="Robot Service" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="220" y="20" width="140" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e1" value="ROS" edge="1" source="n1" target="n2" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                  </root>
+                </mxGraphModel>
+                """,
+            )
+            doc.write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    confluence_page_id: "32243721"
+                    ---
+
+                    # Hardware
+                    <!-- confluence-drawio diagram="HWA" diagram_slug="hwa" owner_page_id="32243721" source="structured-macro:drawio" -->
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            mapping_result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "map_doc_drawio.py"),
+                    "--doc",
+                    str(doc),
+                    "--xml-dir",
+                    str(xml_dir),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            map_payload = json.loads(mapping_result.stdout)
+            diagram_payload = render_mermaid.build_diagram_payload(map_payload)
+            diagram_json = tmp_path / "diagram.json"
+            diagram_json.write_text(json.dumps(diagram_payload, ensure_ascii=False), encoding="utf-8")
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "render_mermaid_doc.py"),
+                    "--doc",
+                    str(doc),
+                    "--diagram-json",
+                    str(diagram_json),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            rendered = doc.read_text(encoding="utf-8")
+            self.assertIn("```mermaid", rendered)
+            self.assertIn('gateway["Gateway"]', rendered)
+            self.assertIn("gateway -->|ROS| robot_service", rendered)
+            self.assertNotIn("confluence-drawio", rendered)
+
+    def test_render_drawio_mermaid_fails_on_unsupported_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            xml_dir = tmp_path / "xml"
+            xml_dir.mkdir()
+            self.write_xml(
+                xml_dir / "bad.xml",
+                """
+                <mxGraphModel>
+                  <root>
+                    <mxCell id="0" />
+                    <mxCell id="1" parent="0" />
+                    <mxCell id="n1" value="Gateway" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="20" y="20" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="n2" style="rounded=1;" vertex="1" parent="1">
+                      <mxGeometry x="220" y="20" width="120" height="60" as="geometry" />
+                    </mxCell>
+                    <mxCell id="e1" edge="1" source="n1" target="n2" parent="1">
+                      <mxGeometry relative="1" as="geometry" />
+                    </mxCell>
+                  </root>
+                </mxGraphModel>
+                """,
+            )
+            map_json = tmp_path / "map.json"
+            map_json.write_text(
+                json.dumps(
+                    {
+                        "document": {"xml_dir": str(xml_dir)},
+                        "sections": [{"heading": "Hardware", "xml": "bad.xml", "mode": "placeholder"}],
+                        "xml_files": ["bad.xml"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "render_drawio_mermaid.py"),
+                    "--map-json",
+                    str(map_json),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsupported edges", result.stderr)
 
 
 if __name__ == "__main__":

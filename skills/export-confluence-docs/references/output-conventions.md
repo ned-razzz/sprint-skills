@@ -9,6 +9,7 @@
 ## Grouping
 
 - Convert meaningful enclosing boxes to `subgraph`.
+- Only convert containers that do not participate in edges.
 - Do not create `subgraph` for decorative category text alone.
 - Keep nested groups only when they express real containment.
 
@@ -29,3 +30,4 @@
 - Emit fenced code blocks with `mermaid`.
 - Keep only Mermaid source inside the fence.
 - End each replaced section body with a newline.
+- The engine always emits `flowchart TB`.

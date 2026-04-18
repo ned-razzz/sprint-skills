@@ -1,7 +1,7 @@
 interface:
   display_name: "Export Confluence Docs"
   short_description: "Use Atlassian MCP for Confluence export"
-  default_prompt: "Use $export-confluence-docs to fetch selected Confluence pages and draw.io attachments through Atlassian MCP, stage them into ./docs and /tmp/export-confluence-docs, convert the XML into Mermaid, and rewrite the Markdown sections."
+  default_prompt: "Use $export-confluence-docs to fetch selected Confluence pages and draw.io attachments through Atlassian MCP, stage them into ./docs and /tmp/export-confluence-docs, run the deterministic draw.io-to-Mermaid engine, and rewrite the Markdown sections."
 dependencies:
   tools:
     - type: "mcp"

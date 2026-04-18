@@ -1,49 +1,32 @@
-# Diagram Selection
+# Diagram Scope
 
-Use the IR to choose the Mermaid type that best represents the diagram's meaning.
+The deterministic engine supports architecture-style draw.io documents only.
 
-## Prefer `flowchart TB`
-
-Choose `flowchart TB` when the XML describes:
+## Supported Inputs
 
 - System architecture
 - Hardware layout
 - Deployment topology
 - Components and communication links
-- Services, devices, databases, and controllers connected by labeled edges
+- Services, devices, databases, and controllers connected by labeled or unlabeled edges
 
-This is the default and the fallback.
+## Output Type
 
-## Choose `sequenceDiagram`
+- Always emit `flowchart TB`.
+- Do not switch to `sequenceDiagram`, `stateDiagram-v2`, or `classDiagram`.
 
-Choose `sequenceDiagram` only when:
+## Fail Instead Of Guessing
 
-- The main meaning is temporal interaction
-- Participants are stable actors or services
-- Edge order matters more than containment or topology
+Fail the document when the XML contains meaning that cannot be safely preserved as an architecture flowchart, including:
 
-Do not choose it just because arrows exist.
-
-## Choose `stateDiagram-v2`
-
-Choose `stateDiagram-v2` only when:
-
-- Nodes are states rather than components
-- Edges represent explicit transitions
-- Labels read like triggers, events, or conditions
-
-## Choose `classDiagram`
-
-Choose `classDiagram` only when:
-
-- Nodes are types, classes, or entities
-- Edges represent inheritance, composition, ownership, or typed associations
-- Methods or attributes are present or strongly implied
+- Connected unlabeled vertices
+- Edges that point at non-renderable vertices
+- Text-only nodes that participate in edges
+- Overlapping container semantics that are not strictly nested
+- Explicitly state/class-like labels such as `[*]` or `<<...>>`
 
 ## Repository Guidance
 
-For the current repository:
-
-- `Hardware Architecture` should normally render as `flowchart TB`.
-- `Software Architecture` should normally render as `flowchart TB`.
+- `Hardware Architecture` should render as `flowchart TB`.
+- `Software Architecture` should render as `flowchart TB`.
 - Preserve communication labels such as `TCP`, `HTTP`, `ROS`, and `UDP`.
