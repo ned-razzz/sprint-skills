@@ -1,9 +1,9 @@
 interface:
   display_name: "Pull Docs From Confluence"
-  short_description: "Use Atlassian MCP metadata plus curl-based draw.io download for Confluence export"
-  default_prompt: "Use $pull-docs-from-confluence to fetch the Atlassian site URL, selected Confluence pages, and draw.io attachment metadata through Atlassian MCP, assemble the metadata into a local bundle JSON with top-level `siteUrl`, run `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle-json>`, download draw.io XML with curl using CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN, and rewrite the Markdown sections with deterministic Mermaid."
+  short_description: "Use Atlassian MCP plus REST metadata backfill and curl-based draw.io download for Confluence export"
+  default_prompt: "Use $pull-docs-from-confluence to fetch `siteUrl` and any available page metadata through Atlassian MCP, assemble a local bundle JSON with top-level `siteUrl`, run `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle-json>`, let the runner backfill missing storage and attachment metadata through Confluence REST using CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN, download draw.io XML with curl, and rewrite the Markdown sections with deterministic Mermaid."
 dependencies:
   tools:
     - type: "mcp"
       value: "atlassian"
-      description: "Atlassian MCP server for Confluence page retrieval and draw.io attachment metadata lookup"
+      description: "Atlassian MCP server for Atlassian site discovery and Confluence page metadata lookup"

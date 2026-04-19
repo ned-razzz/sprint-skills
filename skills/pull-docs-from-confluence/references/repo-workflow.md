@@ -11,7 +11,7 @@ Assume the primary workflow contract already comes from `SKILL.md`:
 - `spaceKey` is optional.
 - `titles` defines the full export scope.
 
-This document only clarifies how the repository layout and rewrite markers behave after Atlassian MCP output has been assembled into the bundle JSON passed to `scripts/run_mcp_export.py`.
+This document only clarifies how the repository layout and rewrite markers behave after Atlassian MCP output has been assembled into the bundle JSON passed to `scripts/run_mcp_export.py`, and after any missing metadata has been backfilled through Confluence REST.
 
 ## Export Layout Details
 
@@ -20,7 +20,7 @@ This document only clarifies how the repository layout and rewrite markers behav
 - Final Markdown documents live at `<outputDir>/<slug>.md`.
 - Each exported document includes `confluence_page_id` in YAML front matter.
 - Temporary XML lives at `/tmp/export-confluence-docs/<slug>--<page_id>/`.
-- XML files come from draw.io attachments discovered through Atlassian MCP metadata and downloaded only with `curl` plus Confluence credentials.
+- XML files come from draw.io attachments discovered through MCP metadata when available, with missing attachment metadata backfilled through Confluence REST, and downloaded only with `curl` plus Confluence credentials.
 - XML files are normalized to `<diagram-slug>.xml` when the Confluence macro exposes `diagramName`.
 
 ## Placeholder Details

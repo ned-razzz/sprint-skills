@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -16,11 +16,15 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from export_confluence_bundle import (
     ConfigError,
+    ConfluenceClient,
     DiagramReference,
     DrawioReferenceExtractor,
     PageProcessingError,
     StorageToMarkdownConverter,
     build_attachment_download_url,
+    build_page_url,
+    choose_page,
+    confluence_base_url,
     ensure_xml_content,
     find_fallback_drawio_attachments,
     find_matching_attachment,
@@ -32,6 +36,7 @@ from export_confluence_bundle import (
     normalized_xml_filename,
     page_directory_name,
     page_frontmatter,
+    require_credentials,
 )
 from map_doc_drawio import build_mapping
 from render_drawio_mermaid import build_diagram_payload
@@ -42,13 +47,13 @@ TEMP_ROOT = Path("/tmp/export-confluence-docs")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the MCP-first Confluence export pipeline with curl-based draw.io XML download.",
+        description="Run the MCP-assisted Confluence export pipeline with REST metadata backfill and curl-based draw.io download.",
     )
     parser.add_argument("--config", required=True, help="Path to the current working directory config.json.")
     parser.add_argument(
         "--bundle-json",
         required=True,
-        help="Path to JSON page/attachment metadata assembled from Atlassian MCP, or - for stdin.",
+        help="Path to JSON metadata assembled from Atlassian MCP, or - for stdin.",
     )
     parser.add_argument("--temp-root", default=str(TEMP_ROOT), help="Base temp directory for downloaded XML.")
     parser.add_argument("--curl-bin", default="curl", help="curl executable to use for XML downloads.")
@@ -64,10 +69,177 @@ def load_bundle(bundle_arg: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ConfigError("MCP bundle must be a JSON object")
     payload["siteUrl"] = normalize_site_url(payload.get("siteUrl"), field_name="siteUrl")
-    pages = payload.get("pages")
-    if not isinstance(pages, list) or not pages:
-        raise ConfigError("MCP bundle must contain a non-empty pages array")
+    pages = payload.get("pages", [])
+    if not isinstance(pages, list):
+        raise ConfigError("MCP bundle pages must be an array when provided")
+    payload["pages"] = pages
     return payload
+
+
+def page_id_from_payload(page_payload: dict[str, Any]) -> str:
+    return str(page_payload.get("pageId") or page_payload.get("id") or "").strip()
+
+
+def page_title_from_payload(page_payload: dict[str, Any]) -> str:
+    return str(page_payload.get("title") or "").strip()
+
+
+def page_source_from_payload(page_payload: dict[str, Any]) -> str:
+    return str(page_payload.get("sourceUrl") or page_payload.get("source") or "").strip()
+
+
+def page_storage_from_payload(page_payload: dict[str, Any]) -> str:
+    storage = page_payload.get("storage")
+    if storage is None:
+        storage = (((page_payload.get("body") or {}).get("storage") or {}).get("value")) or ""
+    return storage if isinstance(storage, str) else ""
+
+
+def page_version_from_payload(page_payload: dict[str, Any]) -> int:
+    raw_version = page_payload.get("version")
+    if isinstance(raw_version, dict):
+        return int(raw_version.get("number") or 0)
+    return int(raw_version or 0)
+
+
+def attachment_download_path(raw: dict[str, Any]) -> str:
+    download_path = str(raw.get("downloadPath") or "").strip()
+    if download_path:
+        return download_path
+    links = raw.get("_links") or {}
+    if isinstance(links, dict):
+        return str(links.get("download") or "").strip()
+    return ""
+
+
+def attachment_has_required_metadata(raw: dict[str, Any]) -> bool:
+    attachment_id = str(raw.get("id") or "").strip()
+    title = str(raw.get("title") or "").strip()
+    media_type = str(raw.get("mediaType") or media_type_of_attachment(raw) or "").strip()
+    return bool(attachment_id and title and media_type and attachment_download_path(raw))
+
+
+def extract_candidate_attachments(page_payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    attachments_by_page: dict[str, list[dict[str, Any]]] = {}
+
+    raw_index = page_payload.get("attachmentsByPageId") or {}
+    if isinstance(raw_index, dict):
+        for owner_page_id, attachments in raw_index.items():
+            if not isinstance(attachments, list):
+                continue
+            owner_key = str(owner_page_id).strip()
+            if not owner_key:
+                continue
+            attachments_by_page[owner_key] = [item for item in attachments if isinstance(item, dict)]
+
+    raw_attachments = page_payload.get("attachments") or []
+    if isinstance(raw_attachments, list):
+        for raw_attachment in raw_attachments:
+            if not isinstance(raw_attachment, dict):
+                continue
+            owner_page_id = str(
+                raw_attachment.get("ownerPageId")
+                or raw_attachment.get("pageId")
+                or page_id_from_payload(page_payload)
+                or ""
+            ).strip()
+            if not owner_page_id:
+                continue
+            attachments_by_page.setdefault(owner_page_id, []).append(raw_attachment)
+
+    return attachments_by_page
+
+
+def index_bundle_pages(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    for page_payload in bundle["pages"]:
+        if not isinstance(page_payload, dict):
+            raise ConfigError("each page entry must be an object")
+        title = page_title_from_payload(page_payload)
+        if not title:
+            raise ConfigError("each page entry must include title")
+        if title in indexed:
+            raise ConfigError(f"duplicate page title in MCP bundle: {title}")
+        indexed[title] = page_payload
+    return indexed
+
+
+def fetch_rest_page(
+    *,
+    page_payload: dict[str, Any],
+    title: str,
+    space_key: str | None,
+    client: ConfluenceClient,
+) -> dict[str, Any]:
+    page_id = page_id_from_payload(page_payload)
+    if page_id:
+        return client.fetch_page(page_id)
+    matches = client.search_pages(title, space_key)
+    chosen = choose_page(title, matches)
+    chosen_page_id = str(chosen.get("id") or "").strip()
+    if not chosen_page_id:
+        raise ConfigError(f"REST page search returned no page id for '{title}'")
+    return client.fetch_page(chosen_page_id)
+
+
+def complete_attachments_for_owner(
+    attachments_by_page: dict[str, list[dict[str, Any]]],
+    owner_page_id: str,
+) -> bool:
+    attachments = attachments_by_page.get(owner_page_id)
+    if attachments is None:
+        return False
+    return all(attachment_has_required_metadata(item) for item in attachments)
+
+
+def enrich_page_payload(
+    *,
+    config: Any,
+    site_url: str,
+    title: str,
+    page_payload: dict[str, Any],
+    get_rest_client: Callable[[], ConfluenceClient],
+) -> dict[str, Any]:
+    working = dict(page_payload)
+    rest_page: dict[str, Any] | None = None
+
+    if not page_id_from_payload(working) or not page_storage_from_payload(working) or not page_source_from_payload(working):
+        rest_page = fetch_rest_page(
+            page_payload=working,
+            title=title,
+            space_key=config.space_key,
+            client=get_rest_client(),
+        )
+        working.setdefault("id", str(rest_page.get("id") or "").strip())
+        working["pageId"] = page_id_from_payload(working) or str(rest_page.get("id") or "").strip()
+        if not page_storage_from_payload(working):
+            working["storage"] = ((((rest_page.get("body") or {}).get("storage") or {}).get("value")) or "")
+        if not page_source_from_payload(working):
+            working["sourceUrl"] = build_page_url(confluence_base_url(site_url), rest_page)
+        if page_version_from_payload(working) == 0:
+            working["version"] = rest_page.get("version") or 0
+
+    page_id = page_id_from_payload(working)
+    attachments_by_page = extract_candidate_attachments(working)
+    references = DrawioReferenceExtractor().extract(page_storage_from_payload(working))
+    owner_page_ids = {page_id}
+    owner_page_ids.update(reference.owner_page_id or page_id for reference in references)
+
+    needs_rest_attachments = any(
+        not complete_attachments_for_owner(attachments_by_page, owner_page_id)
+        for owner_page_id in owner_page_ids
+    )
+    if needs_rest_attachments:
+        client = get_rest_client()
+        for owner_page_id in owner_page_ids:
+            if complete_attachments_for_owner(attachments_by_page, owner_page_id):
+                continue
+            attachments_by_page[owner_page_id] = client.list_attachments(owner_page_id)
+
+    if attachments_by_page:
+        working["attachmentsByPageId"] = attachments_by_page
+
+    return normalize_page(working)
 
 
 def normalize_attachment(raw: dict[str, Any], owner_page_id: str) -> dict[str, Any]:
@@ -133,21 +305,14 @@ def normalize_page(page_payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(page_payload, dict):
         raise ConfigError("each page entry must be an object")
 
-    title = str(page_payload.get("title") or "").strip()
-    page_id = str(page_payload.get("pageId") or page_payload.get("id") or "").strip()
+    title = page_title_from_payload(page_payload)
+    page_id = page_id_from_payload(page_payload)
     if not title or not page_id:
         raise ConfigError("each page entry must include title and pageId")
 
-    raw_version = page_payload.get("version")
-    if isinstance(raw_version, dict):
-        version = int(raw_version.get("number") or 0)
-    else:
-        version = int(raw_version or 0)
-
-    source_url = str(page_payload.get("sourceUrl") or page_payload.get("source") or "").strip()
-    storage = page_payload.get("storage")
-    if storage is None:
-        storage = (((page_payload.get("body") or {}).get("storage") or {}).get("value")) or ""
+    version = page_version_from_payload(page_payload)
+    source_url = page_source_from_payload(page_payload)
+    storage = page_storage_from_payload(page_payload)
     if not isinstance(storage, str) or not storage.strip():
         raise ConfigError(f"page '{title}' is missing storage content")
     if not source_url:
@@ -381,7 +546,7 @@ def main() -> int:
         config = load_config(args.config)
         bundle = load_bundle(args.bundle_json)
         site_url = bundle["siteUrl"]
-        pages_by_title = normalize_pages(bundle)
+        pages_by_title = index_bundle_pages(bundle)
     except (ConfigError, OSError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
@@ -389,14 +554,25 @@ def main() -> int:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     temp_root = Path(args.temp_root).expanduser()
     temp_root.mkdir(parents=True, exist_ok=True)
+    rest_client: ConfluenceClient | None = None
+
+    def get_rest_client() -> ConfluenceClient:
+        nonlocal rest_client
+        if rest_client is None:
+            email, token = require_credentials()
+            rest_client = ConfluenceClient(confluence_base_url(site_url), email, token)
+        return rest_client
 
     results: list[dict[str, Any]] = []
     for title in config.titles:
-        page = pages_by_title.get(title)
-        if page is None:
-            results.append({"title": title, "status": "failed", "reason": f"page not found in MCP bundle: {title}"})
-            continue
         try:
+            page = enrich_page_payload(
+                config=config,
+                site_url=site_url,
+                title=title,
+                page_payload=pages_by_title.get(title, {"title": title}),
+                get_rest_client=get_rest_client,
+            )
             results.append(
                 process_page(
                     config=config,

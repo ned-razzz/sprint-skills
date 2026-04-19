@@ -9,7 +9,7 @@ This repository provides specialized skills for the Gemini CLI to automate and s
 ## Prerequisites
 Before using the `pull-docs-from-confluence` skill, ensure your environment meets the following requirements:
 
-- **Confluence Access**: The canonical export path fetches page metadata and content through the Confluence REST API. Atlassian MCP is optional when you already have a prebuilt bundle for `run_mcp_export.py`.
+- **Confluence Access**: The default export path uses Atlassian MCP for `siteUrl` and any available page metadata, then backfills missing storage and attachment metadata through the Confluence REST API.
 - **Environment Variables**: The following credentials are required to download draw.io XML attachments:
   ```bash
   export CONFLUENCE_EMAIL="your-email@example.com"
@@ -33,6 +33,6 @@ Before using the `pull-docs-from-confluence` skill, ensure your environment meet
 
 ## pull-docs-from-confluence Workflow
 
-- Canonical path: `python3 scripts/export_confluence_bundle.py --site-url https://<site>.atlassian.net --config ./config.json`
-- Compatibility path: `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle.json>`
+- Default path: `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle.json>`
+- REST-first path: `python3 scripts/export_confluence_bundle.py --site-url https://<site>.atlassian.net --config ./config.json`
 - Both paths share the same bundle processor for Markdown export, draw.io XML download, mapping, and Mermaid rendering.
