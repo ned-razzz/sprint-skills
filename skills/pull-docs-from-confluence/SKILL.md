@@ -1,13 +1,11 @@
 ---
-name: export-confluence-docs
-description: Export Confluence design pages using the current working directory `config.json` plus Atlassian MCP page/attachment metadata, download draw.io XML with `curl`, and rewrite the exported Markdown with deterministic Mermaid.
+name: pull-docs-from-confluence
+description: Pull selected Confluence pages into repository Markdown files based on the current working directory `config.json`, including diagram-ready document output.
 ---
 
-# Export Confluence Docs
+# Pull Docs From Confluence
 
-Run one MCP-first Confluence-to-Markdown workflow that reads the current working directory `config.json`, accepts page and attachment metadata collected through Atlassian MCP, downloads draw.io XML with `curl`, and keeps temporary XML in `/tmp/export-confluence-docs` for deterministic Mermaid conversion.
-
-Path base: every relative path in this skill, including `scripts/...` and `references/...`, is relative to this skill directory (`/home/robo/.codex/skills/export-confluence-docs/`), not the target repository root.
+Run one MCP-first Confluence-to-Markdown workflow that reads the current working directory `config.json`, accepts page and attachment metadata collected through Atlassian MCP, downloads draw.io XML with `curl`, and keeps temporary XML in `/tmp/pulls-doec-from-confluence` for deterministic Mermaid conversion.
 
 ## Preconditions
 
@@ -41,7 +39,7 @@ Path base: every relative path in this skill, including `scripts/...` and `refer
 3. Use Atlassian MCP to fetch each selected page's storage body, page id, version, and source URL.
 4. Use Atlassian MCP to collect draw.io attachment metadata for the page or referenced owner pages, including attachment id, title, media type, owner page id, and `_links.download`.
 5. Assemble that MCP output into one local bundle JSON and run `python3 scripts/run_mcp_export.py --config <cwd-config.json> --bundle-json <bundle-json>`.
-6. The runner converts storage to Markdown plus draw.io placeholders under `outputDir`, downloads XML to `/tmp/export-confluence-docs/<slug>--<page_id>/` with `curl`, validates XML, maps sections to XML, renders Mermaid, and rewrites the Markdown document.
+6. The runner converts storage to Markdown plus draw.io placeholders under `outputDir`, downloads XML to `/tmp/pulls-doec-from-confluence/<slug>--<page_id>/` with `curl`, validates XML, maps sections to XML, renders Mermaid, and rewrites the Markdown document.
 
 ## MCP Notes
 
@@ -55,7 +53,7 @@ Path base: every relative path in this skill, including `scripts/...` and `refer
 ## Export Contract
 
 - Final Markdown path is `<outputDir>/<slug>.md` when `outputDir` is defined in the current working directory `config.json`.
-- Temporary XML path is `/tmp/export-confluence-docs/<slug>--<page_id>/`.
+- Temporary XML path is `/tmp/pulls-doec-from-confluence/<slug>--<page_id>/`.
 - Draw.io attachment metadata comes from Atlassian MCP, but XML bytes are downloaded only with `curl` using `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN`.
 - Raw draw.io sections are exported as one HTML comment placeholder per heading section:
   `<!-- confluence-drawio diagram="..." diagram_slug="..." owner_page_id="..." source="..." -->`
@@ -86,6 +84,6 @@ Path base: every relative path in this skill, including `scripts/...` and `refer
 
 ## Validation
 
-- Run `python3 /home/robo/.codex/skills/.system/skill-creator/scripts/quick_validate.py /home/robo/projects/skills-workbench/skills/export-confluence-docs` after editing the skill.
+- Run `python3 /home/robo/.codex/skills/.system/skill-creator/scripts/quick_validate.py /home/robo/projects/skills-workbench/skills/pull-docs-from-confluence` after editing the skill.
 - Run `python3 tests_export_confluence_docs.py` from the skill directory to validate placeholder export and mapping logic.
 - Use `scripts/render_mermaid_doc.py --stdout` or `--check` before overwriting files when you want a safe preview.

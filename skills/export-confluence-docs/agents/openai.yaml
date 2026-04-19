@@ -1,9 +1,0 @@
-interface:
-  display_name: "Export Confluence Docs"
-  short_description: "Use Atlassian MCP metadata plus curl-based draw.io download for Confluence export"
-  default_prompt: "Use $export-confluence-docs to fetch selected Confluence pages and draw.io attachment metadata through Atlassian MCP, assemble the metadata into a local bundle JSON, run `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle-json>`, download draw.io XML with curl using CONFLUENCE_EMAIL and CONFLUENCE_API_TOKEN, and rewrite the Markdown sections with deterministic Mermaid."
-dependencies:
-  tools:
-    - type: "mcp"
-      value: "atlassian"
-      description: "Atlassian MCP server for Confluence page retrieval and draw.io attachment metadata lookup"
