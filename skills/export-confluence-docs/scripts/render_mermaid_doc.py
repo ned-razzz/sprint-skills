@@ -4,31 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
-HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$", re.MULTILINE)
-MERMAID_FENCE = "```mermaid"
-DRAWIO_PLACEHOLDER_RE = re.compile(
-    r'<!--\s*confluence-drawio\b(?P<attrs>.*?)-->\s*',
-    re.IGNORECASE | re.DOTALL,
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from doc_mapping_utils import (
+    DRAWIO_PLACEHOLDER_RE,
+    RENDERED_BLOCK_RE,
+    extract_section_marker,
+    format_rendered_marker,
+    match_marker_to_xml,
+    parse_sections,
+    split_front_matter,
 )
-ATTR_RE = re.compile(r'([a-zA-Z0-9_:-]+)="([^"]*)"')
-
-
-def preferred_xml_for_heading(heading: str, pending_xml_names: list[str]) -> str | None:
-    heading_lower = heading.lower()
-    aliases = []
-    if "hardware" in heading_lower:
-        aliases = ["hwa", "hardware"]
-    elif "software" in heading_lower:
-        aliases = ["sas", "software"]
-    for alias in aliases:
-        match = next((name for name in pending_xml_names if alias in Path(name).stem.lower()), None)
-        if match is not None:
-            return match
-    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,16 +29,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--check", action="store_true", help="Do not write files; exit with code 2 if changed.")
     parser.add_argument("--stdout", action="store_true", help="Print the rendered Markdown to stdout.")
     return parser.parse_args()
-
-
-def split_front_matter(text: str) -> tuple[str, str]:
-    if not text.startswith("---\n"):
-        return "", text
-    end = text.find("\n---\n", 4)
-    if end < 0:
-        raise ValueError("front matter closing delimiter not found")
-    return text[: end + 5], text[end + 5 :]
-
 
 def load_diagrams(raw: dict) -> dict[str, dict]:
     diagrams = raw.get("diagrams")
@@ -66,31 +47,9 @@ def load_diagrams(raw: dict) -> dict[str, dict]:
         by_xml[xml_name] = item
     return by_xml
 
-
-def parse_sections(body: str) -> list[dict]:
-    matches = list(HEADING_RE.finditer(body))
-    sections = []
-    for index, match in enumerate(matches):
-        start = match.start()
-        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        block = body[start:next_start]
-        newline_index = block.find("\n")
-        heading_line = block if newline_index < 0 else block[:newline_index]
-        section_body = "" if newline_index < 0 else block[newline_index + 1 :]
-        sections.append({"heading_line": heading_line, "heading": match.group(2).strip(), "body": section_body})
-    return sections
-
-
-def section_xml_hint(body: str, pending_xml_names: list[str]) -> str | None:
-    placeholder = DRAWIO_PLACEHOLDER_RE.search(body)
-    if placeholder:
-        for xml_name in pending_xml_names:
-            if Path(xml_name).stem.lower() in placeholder.group(0).lower():
-                return xml_name
-    for xml_name in pending_xml_names:
-        if Path(xml_name).stem.lower() in body.lower():
-            return xml_name
-    return None
+def render_block(attrs: dict[str, str], xml_name: str, mermaid: str) -> str:
+    marker = format_rendered_marker(attrs, xml_name)
+    return f"{marker}\n```mermaid\n{mermaid.rstrip()}\n```\n"
 
 
 def strip_drawio_placeholder(body: str) -> str:
@@ -98,81 +57,68 @@ def strip_drawio_placeholder(body: str) -> str:
     return stripped.lstrip("\n")
 
 
-def placeholder_attrs(text: str) -> list[dict[str, str]]:
-    attrs_list: list[dict[str, str]] = []
-    for match in DRAWIO_PLACEHOLDER_RE.finditer(text):
-        attrs = {key: value for key, value in ATTR_RE.findall(match.group("attrs"))}
-        if attrs:
-            attrs_list.append(attrs)
-    return attrs_list
+def replace_diagram_block(section: dict, diagrams_by_xml: dict[str, dict], pending_xml_names: list[str]) -> str:
+    try:
+        marker_type, attrs = extract_section_marker(section["body"])
+    except ValueError as exc:
+        raise ValueError(f"{exc} in section '{section['heading']}'") from exc
+
+    if marker_type is None or attrs is None:
+        return section["body"]
+
+    xml_name = match_marker_to_xml(attrs, pending_xml_names)
+    if xml_name is None:
+        xml_name = match_marker_to_xml(attrs, list(diagrams_by_xml.keys()))
+    if xml_name is None:
+        diagram_name = attrs.get("diagram") or attrs.get("diagram_slug") or "unknown"
+        raise ValueError(f"no diagram payload available for section '{section['heading']}' ({diagram_name})")
+
+    diagram = diagrams_by_xml.get(xml_name)
+    if diagram is None:
+        raise ValueError(f"diagram payload is missing xml '{xml_name}'")
+    if xml_name in pending_xml_names:
+        pending_xml_names.remove(xml_name)
+
+    replacement = render_block(attrs, xml_name, diagram["mermaid"])
+    if marker_type == "placeholder":
+        match = DRAWIO_PLACEHOLDER_RE.search(section["body"])
+        if match is None:
+            raise ValueError(f"draw.io placeholder not found in section '{section['heading']}'")
+        return section["body"][: match.start()] + replacement + section["body"][match.end() :]
+
+    match = RENDERED_BLOCK_RE.search(section["body"])
+    if match is None:
+        raise ValueError(f"rendered draw.io block not found in section '{section['heading']}'")
+    return section["body"][: match.start()] + replacement + section["body"][match.end() :]
 
 
-def match_placeholder_to_xml(attrs: dict[str, str], pending_xml_names: list[str]) -> str | None:
-    diagram_slug = attrs.get("diagram_slug", "").casefold()
-    diagram_name = attrs.get("diagram", "").casefold()
-    xml_by_stem = {Path(xml_name).stem.casefold(): xml_name for xml_name in pending_xml_names}
-    if diagram_slug and diagram_slug in xml_by_stem:
-        return xml_by_stem[diagram_slug]
-    if diagram_name and diagram_name in xml_by_stem:
-        return xml_by_stem[diagram_name]
-    return None
-
-
-def render_placeholder_blocks(text: str, diagrams_by_xml: dict[str, dict]) -> str:
+def render_document(doc_path: Path, diagrams_by_xml: dict[str, dict]) -> str:
+    original = doc_path.read_text(encoding="utf-8")
+    front_matter, body = split_front_matter(original)
+    sections = parse_sections(body)
+    preamble = body[: body.find(sections[0]["heading_line"])] if sections else body
     pending_xml_names = list(diagrams_by_xml.keys())
 
-    def replace(match: re.Match[str]) -> str:
-        nonlocal pending_xml_names
-        attrs = {key: value for key, value in ATTR_RE.findall(match.group("attrs"))}
-        xml_name = match_placeholder_to_xml(attrs, pending_xml_names)
-        if xml_name is None and len(pending_xml_names) == 1:
-            xml_name = pending_xml_names[0]
-        if xml_name is None:
-            diagram_name = attrs.get("diagram") or attrs.get("diagram_slug") or "unknown"
-            raise ValueError(f"no diagram payload available for placeholder '{diagram_name}'")
-        diagram = diagrams_by_xml[xml_name]
-        pending_xml_names.remove(xml_name)
-        return f"```mermaid\n{diagram['mermaid'].rstrip()}\n```\n"
+    rendered = front_matter + preamble
+    for section in sections:
+        rendered_body = replace_diagram_block(section, diagrams_by_xml, pending_xml_names)
+        rendered += section["heading_line"] + "\n" + rendered_body
 
-    return DRAWIO_PLACEHOLDER_RE.sub(replace, text)
+    if pending_xml_names:
+        raise ValueError(f"unused diagram payloads: {', '.join(pending_xml_names)}")
+    if not rendered.endswith("\n"):
+        rendered += "\n"
+    return rendered
 
 
 def main() -> int:
     try:
         args = parse_args()
         doc_path = Path(args.doc)
-        original = doc_path.read_text(encoding="utf-8")
-        front_matter, body = split_front_matter(original)
-        sections = parse_sections(body)
-        preamble = body[: body.find(sections[0]["heading_line"])] if sections else body
         raw_json = sys.stdin.read() if args.diagram_json == "-" else Path(args.diagram_json).read_text(encoding="utf-8")
         diagrams_by_xml = load_diagrams(json.loads(raw_json))
-        if "confluence-drawio" in body.lower():
-            rendered_body = render_placeholder_blocks(body, diagrams_by_xml)
-            rendered = front_matter + rendered_body
-        else:
-            pending_xml_names = list(diagrams_by_xml.keys())
-            for section in sections:
-                lowered = section["body"].lower()
-                if "confluence-drawio" not in lowered and MERMAID_FENCE not in lowered:
-                    continue
-                xml_name = section_xml_hint(section["body"], pending_xml_names)
-                if xml_name is None:
-                    xml_name = preferred_xml_for_heading(section["heading"], pending_xml_names)
-                if xml_name is None and pending_xml_names:
-                    xml_name = pending_xml_names[0]
-                if xml_name is None:
-                    raise ValueError(f"no diagram payload available for section '{section['heading']}'")
-                diagram = diagrams_by_xml[xml_name]
-                section["body"] = f"```mermaid\n{diagram['mermaid'].rstrip()}\n```\n"
-                pending_xml_names.remove(xml_name)
-
-            rendered = front_matter + preamble
-            for section in sections:
-                body_text = strip_drawio_placeholder(section["body"])
-                rendered += section["heading_line"] + "\n" + body_text
-        if not rendered.endswith("\n"):
-            rendered += "\n"
+        original = doc_path.read_text(encoding="utf-8")
+        rendered = render_document(doc_path, diagrams_by_xml)
 
         if args.stdout:
             sys.stdout.write(rendered)

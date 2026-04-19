@@ -29,5 +29,6 @@
 
 - Emit fenced code blocks with `mermaid`.
 - Keep only Mermaid source inside the fence.
+- Prepend each rendered fence with `<!-- confluence-drawio-rendered ... xml="..." -->` so reruns can target the correct XML deterministically.
 - End each replaced section body with a newline.
 - The engine always emits `flowchart TB`.

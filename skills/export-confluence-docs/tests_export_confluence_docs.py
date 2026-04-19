@@ -30,6 +30,7 @@ map_doc = load_module("map_doc_drawio", SCRIPTS_DIR / "map_doc_drawio.py")
 extract_ir = load_module("extract_drawio_ir", SCRIPTS_DIR / "extract_drawio_ir.py")
 render_mermaid = load_module("render_drawio_mermaid", SCRIPTS_DIR / "render_drawio_mermaid.py")
 render_doc = load_module("render_mermaid_doc", SCRIPTS_DIR / "render_mermaid_doc.py")
+run_mcp = load_module("run_mcp_export", SCRIPTS_DIR / "run_mcp_export.py")
 
 
 class ExportConfluenceDocsTests(unittest.TestCase):
@@ -262,11 +263,9 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             )
             resolved = map_doc.resolve_xml_dir(doc, "32243721", str(xml_dir))
             self.assertEqual(resolved, xml_dir)
-            text = doc.read_text(encoding="utf-8")
-            _, body = map_doc.split_front_matter(text)
-            sections = map_doc.parse_sections(body)
-            attrs = map_doc.placeholder_attrs(sections[0]["body"])
-            self.assertEqual(attrs[0]["diagram_slug"], "hwa")
+            payload = map_doc.build_mapping(doc, str(xml_dir))
+            self.assertEqual(payload["sections"][0]["diagram_slug"], "hwa")
+            self.assertEqual(payload["sections"][0]["xml"], "hwa.xml")
 
     def test_render_mermaid_doc_removes_placeholder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,19 +293,12 @@ class ExportConfluenceDocsTests(unittest.TestCase):
                 encoding="utf-8",
             )
             original = doc.read_text(encoding="utf-8")
-            front_matter, body = render_doc.split_front_matter(original)
-            sections = render_doc.parse_sections(body)
-            self.assertIn("confluence-drawio", sections[0]["body"])
             diagrams_by_xml = render_doc.load_diagrams(json.loads(diagram_json.read_text(encoding="utf-8")))
-            pending = list(diagrams_by_xml.keys())
-            xml_name = render_doc.section_xml_hint(sections[0]["body"], pending)
-            self.assertEqual(xml_name, "hwa.xml")
-            sections[0]["body"] = "```mermaid\nflowchart TB\n  a --> b\n```\n"
-            rendered = front_matter
-            for section in sections:
-                rendered += section["heading_line"] + "\n" + render_doc.strip_drawio_placeholder(section["body"])
+            rendered = render_doc.render_document(doc, diagrams_by_xml)
             self.assertIn("```mermaid", rendered)
-            self.assertNotIn("confluence-drawio", rendered)
+            self.assertIn('confluence-drawio-rendered diagram="HWA"', rendered)
+            self.assertNotIn('confluence-drawio diagram="HWA"', rendered)
+            self.assertNotEqual(rendered, original)
 
     def test_render_mermaid_doc_replaces_each_placeholder_by_matching_drawio_name(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -357,9 +349,47 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             )
 
             rendered = doc.read_text(encoding="utf-8")
-            self.assertIn("# Hardware\n```mermaid\nflowchart TB\n  hard_a --> hard_b\n```", rendered)
-            self.assertIn("# Software\n```mermaid\nflowchart TB\n  soft_a --> soft_b\n```", rendered)
-            self.assertNotIn("confluence-drawio", rendered)
+            self.assertIn('# Hardware\n<!-- confluence-drawio-rendered diagram="HWA.drawio"', rendered)
+            self.assertIn("flowchart TB\n  hard_a --> hard_b", rendered)
+            self.assertIn('# Software\n<!-- confluence-drawio-rendered diagram="SAS.drawio"', rendered)
+            self.assertIn("flowchart TB\n  soft_a --> soft_b", rendered)
+            self.assertNotIn('confluence-drawio diagram="', rendered)
+
+    def test_render_mermaid_doc_rerenders_existing_marker_block_without_touching_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            doc = tmp_path / "system-architecture.md"
+            doc.write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    confluence_page_id: "32243721"
+                    ---
+
+                    Intro paragraph.
+
+                    # Hardware
+                    Before diagram.
+                    <!-- confluence-drawio-rendered diagram="HWA" diagram_slug="hwa" owner_page_id="32243721" source="structured-macro:drawio" xml="hwa.xml" -->
+                    ```mermaid
+                    flowchart TB
+                      old --> graph
+                    ```
+                    After diagram.
+                    """
+                ),
+                encoding="utf-8",
+            )
+            rendered = render_doc.render_document(
+                doc,
+                {"hwa.xml": {"xml": "hwa.xml", "mermaid": "flowchart TB\n  fresh --> graph"}},
+            )
+            self.assertIn("Intro paragraph.", rendered)
+            self.assertIn("Before diagram.", rendered)
+            self.assertIn("After diagram.", rendered)
+            self.assertIn('xml="hwa.xml"', rendered)
+            self.assertIn("flowchart TB\n  fresh --> graph", rendered)
+            self.assertNotIn("old --> graph", rendered)
 
     def test_extract_drawio_ir_reports_connected_unlabeled_vertices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -545,7 +575,202 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             self.assertIn("```mermaid", rendered)
             self.assertIn('gateway["Gateway"]', rendered)
             self.assertIn("gateway -->|ROS| robot_service", rendered)
-            self.assertNotIn("confluence-drawio", rendered)
+            self.assertIn("confluence-drawio-rendered", rendered)
+            self.assertNotIn('confluence-drawio diagram="', rendered)
+
+    def test_map_doc_fails_when_xml_is_unmapped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            doc = tmp_path / "system-architecture.md"
+            xml_dir = tmp_path / "system-architecture--32243721"
+            xml_dir.mkdir()
+            (xml_dir / "hwa.xml").write_text("<mxGraphModel><root/></mxGraphModel>", encoding="utf-8")
+            (xml_dir / "sas.xml").write_text("<mxGraphModel><root/></mxGraphModel>", encoding="utf-8")
+            doc.write_text(
+                textwrap.dedent(
+                    """\
+                    ---
+                    confluence_page_id: "32243721"
+                    ---
+
+                    # Hardware
+                    <!-- confluence-drawio diagram="HWA" diagram_slug="hwa" owner_page_id="32243721" source="structured-macro:drawio" -->
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "unmapped xml files: sas.xml"):
+                map_doc.build_mapping(doc, str(xml_dir))
+
+    def test_run_mcp_export_uses_curl_and_renders_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            output_dir = tmp_path / "docs"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "baseUrl": "https://example.atlassian.net/wiki",
+                        "titles": ["System Architecture"],
+                        "outputDir": str(output_dir),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bundle_path = tmp_path / "bundle.json"
+            bundle_path.write_text(
+                json.dumps(
+                    {
+                        "pages": [
+                            {
+                                "title": "System Architecture",
+                                "pageId": "32243721",
+                                "version": 7,
+                                "sourceUrl": "https://example.atlassian.net/wiki/spaces/ADP/pages/32243721/System+Architecture",
+                                "storage": (
+                                    "<h1>Hardware</h1>"
+                                    '<ac:structured-macro ac:name="drawio">'
+                                    '<ac:parameter ac:name="diagramName">HWA</ac:parameter>'
+                                    '<ac:parameter ac:name="pageId">32243721</ac:parameter>'
+                                    "</ac:structured-macro>"
+                                ),
+                                "attachmentsByPageId": {
+                                    "32243721": [
+                                        {
+                                            "id": "att-1",
+                                            "title": "HWA.drawio",
+                                            "mediaType": "application/vnd.jgraph.mxfile",
+                                            "downloadPath": "/download/attachments/32243721/HWA.drawio",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            curl_path = tmp_path / "fake-curl.sh"
+            curl_path.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -eu
+                    out=""
+                    while [ "$#" -gt 0 ]; do
+                      case "$1" in
+                        --output)
+                          out="$2"
+                          shift 2
+                          ;;
+                        *)
+                          shift
+                          ;;
+                      esac
+                    done
+                    cat > "$out" <<'EOF'
+                    <mxGraphModel><root><mxCell id="0" /><mxCell id="1" parent="0" /><mxCell id="n1" value="Gateway" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="20" y="20" width="120" height="60" as="geometry" /></mxCell><mxCell id="n2" value="Robot Service" style="rounded=1;" vertex="1" parent="1"><mxGeometry x="220" y="20" width="140" height="60" as="geometry" /></mxCell><mxCell id="e1" value="ROS" edge="1" source="n1" target="n2" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell></root></mxGraphModel>
+                    EOF
+                    """
+                ),
+                encoding="utf-8",
+            )
+            curl_path.chmod(0o755)
+
+            env = os.environ.copy()
+            env["CONFLUENCE_EMAIL"] = "user@example.com"
+            env["CONFLUENCE_API_TOKEN"] = "secret-token"
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "run_mcp_export.py"),
+                    "--config",
+                    str(config_path),
+                    "--bundle-json",
+                    str(bundle_path),
+                    "--temp-root",
+                    str(tmp_path / "tmp-export"),
+                    "--curl-bin",
+                    str(curl_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["succeeded"], 1)
+            markdown_path = output_dir / "system-architecture.md"
+            rendered = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("confluence-drawio-rendered", rendered)
+            self.assertIn('gateway["Gateway"]', rendered)
+            self.assertIn("gateway -->|ROS| robot_service", rendered)
+            download = payload["results"][0]["xmlEntries"][0]["download"]
+            self.assertEqual(download["command"][0], str(curl_path))
+            self.assertEqual(download["command"][5], "--user")
+            self.assertEqual(download["command"][6], "<redacted>")
+
+    def test_run_mcp_export_skips_credentials_for_pages_without_diagrams(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            output_dir = tmp_path / "docs"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "baseUrl": "https://example.atlassian.net/wiki",
+                        "titles": ["Notes"],
+                        "outputDir": str(output_dir),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bundle_path = tmp_path / "bundle.json"
+            bundle_path.write_text(
+                json.dumps(
+                    {
+                        "pages": [
+                            {
+                                "title": "Notes",
+                                "pageId": "11",
+                                "version": 1,
+                                "sourceUrl": "https://example.atlassian.net/wiki/spaces/ADP/pages/11/Notes",
+                                "storage": "<h1>Notes</h1><p>No diagrams here.</p>",
+                                "attachmentsByPageId": {"11": []},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.pop("CONFLUENCE_EMAIL", None)
+            env.pop("CONFLUENCE_API_TOKEN", None)
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "run_mcp_export.py"),
+                    "--config",
+                    str(config_path),
+                    "--bundle-json",
+                    str(bundle_path),
+                    "--temp-root",
+                    str(tmp_path / "tmp-export"),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["succeeded"], 1)
+            self.assertEqual(payload["results"][0]["diagramCount"], 0)
 
     def test_render_drawio_mermaid_fails_on_unsupported_structure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
