@@ -28,6 +28,7 @@ from export_confluence_bundle import (
     markdown_output_name,
     media_type_of_attachment,
     mermaid_slug,
+    normalize_site_url,
     normalized_xml_filename,
     page_directory_name,
     page_frontmatter,
@@ -62,6 +63,7 @@ def load_bundle(bundle_arg: str) -> dict[str, Any]:
         raise ConfigError(f"invalid MCP bundle JSON: {exc}") from exc
     if not isinstance(payload, dict):
         raise ConfigError("MCP bundle must be a JSON object")
+    payload["siteUrl"] = normalize_site_url(payload.get("siteUrl"), field_name="siteUrl")
     pages = payload.get("pages")
     if not isinstance(pages, list) or not pages:
         raise ConfigError("MCP bundle must contain a non-empty pages array")
@@ -223,7 +225,7 @@ def curl_download_xml(curl_bin: str, url: str, output_path: Path) -> dict[str, A
 
 def export_drawio_xml_with_curl(
     *,
-    base_url: str,
+    site_url: str,
     references: list[DiagramReference],
     page_id: str,
     attachments_by_page: dict[str, list[dict[str, Any]]],
@@ -261,7 +263,7 @@ def export_drawio_xml_with_curl(
         if not attachment_id or attachment_id in processed_attachment_ids:
             continue
 
-        download_url = build_attachment_download_url(base_url, attachment)
+        download_url = build_attachment_download_url(site_url, attachment)
         if not download_url:
             warnings.append(
                 f"attachment download link missing for '{reference.diagram_name}' "
@@ -300,6 +302,7 @@ def export_drawio_xml_with_curl(
 def process_page(
     *,
     config: Any,
+    site_url: str,
     page: dict[str, Any],
     temp_root: Path,
     curl_bin: str,
@@ -322,7 +325,7 @@ def process_page(
     output_path.write_text(content, encoding="utf-8")
 
     xml_entries, warnings = export_drawio_xml_with_curl(
-        base_url=config.base_url,
+        site_url=site_url,
         references=references,
         page_id=page["pageId"],
         attachments_by_page=page["attachmentsByPageId"],
@@ -377,6 +380,7 @@ def main() -> int:
         args = parse_args()
         config = load_config(args.config)
         bundle = load_bundle(args.bundle_json)
+        site_url = bundle["siteUrl"]
         pages_by_title = normalize_pages(bundle)
     except (ConfigError, OSError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
@@ -396,6 +400,7 @@ def main() -> int:
             results.append(
                 process_page(
                     config=config,
+                    site_url=site_url,
                     page=page,
                     temp_root=temp_root,
                     curl_bin=args.curl_bin,

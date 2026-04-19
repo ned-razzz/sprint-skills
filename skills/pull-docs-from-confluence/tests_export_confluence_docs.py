@@ -44,7 +44,6 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             config_path.write_text(
                 json.dumps(
                     {
-                        "baseUrl": "https://example.atlassian.net/wiki",
                         "titles": ["System Architecture"],
                         "spaceKey": "ADP",
                         "outputDir": "./docs/exported",
@@ -59,10 +58,19 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
 
-            self.assertEqual(config.base_url, "https://example.atlassian.net/wiki")
             self.assertEqual(config.titles, ["System Architecture"])
             self.assertEqual(config.space_key, "ADP")
             self.assertEqual(config.output_dir, tmp_path / "docs" / "exported")
+
+    def test_normalize_site_url_rejects_wiki_path(self) -> None:
+        with self.assertRaisesRegex(bundle.ConfigError, "siteUrl must be an Atlassian site root URL"):
+            bundle.normalize_site_url("https://example.atlassian.net/wiki")
+
+    def test_confluence_base_url_appends_wiki(self) -> None:
+        self.assertEqual(
+            bundle.confluence_base_url("https://example.atlassian.net"),
+            "https://example.atlassian.net/wiki",
+        )
 
     def test_normalized_xml_filename_prefers_diagram_slug(self) -> None:
         self.assertEqual(
@@ -74,7 +82,7 @@ class ExportConfluenceDocsTests(unittest.TestCase):
         attachment = {"_links": {"download": "/download/attachments/123/hwa.drawio?api=v2"}}
         self.assertEqual(
             bundle.build_attachment_download_url(
-                "https://example.atlassian.net/wiki",
+                "https://example.atlassian.net",
                 attachment,
             ),
             "https://example.atlassian.net/download/attachments/123/hwa.drawio?api=v2",
@@ -83,11 +91,34 @@ class ExportConfluenceDocsTests(unittest.TestCase):
     def test_build_attachment_download_url_returns_empty_string_without_link(self) -> None:
         self.assertEqual(
             bundle.build_attachment_download_url(
-                "https://example.atlassian.net/wiki",
+                "https://example.atlassian.net",
                 {"id": "123"},
             ),
             "",
         )
+
+    def test_export_confluence_bundle_requires_site_url_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps({"titles": ["System Architecture"], "outputDir": "./docs"}),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "export_confluence_bundle.py"),
+                    "--config",
+                    str(config_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--site-url", result.stderr)
 
     def test_require_credentials_fails_without_env_vars(self) -> None:
         previous_email = os.environ.pop("CONFLUENCE_EMAIL", None)
@@ -611,7 +642,6 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             config_path.write_text(
                 json.dumps(
                     {
-                        "baseUrl": "https://example.atlassian.net/wiki",
                         "titles": ["System Architecture"],
                         "outputDir": str(output_dir),
                     }
@@ -622,6 +652,7 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             bundle_path.write_text(
                 json.dumps(
                     {
+                        "siteUrl": "https://example.atlassian.net",
                         "pages": [
                             {
                                 "title": "System Architecture",
@@ -714,6 +745,51 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             self.assertEqual(download["command"][5], "--user")
             self.assertEqual(download["command"][6], "<redacted>")
 
+    def test_run_mcp_export_requires_bundle_site_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "config.json"
+            config_path.write_text(
+                json.dumps({"titles": ["System Architecture"], "outputDir": str(tmp_path / "docs")}),
+                encoding="utf-8",
+            )
+            bundle_path = tmp_path / "bundle.json"
+            bundle_path.write_text(
+                json.dumps(
+                    {
+                        "pages": [
+                            {
+                                "title": "System Architecture",
+                                "pageId": "32243721",
+                                "version": 7,
+                                "sourceUrl": "https://example.atlassian.net/wiki/spaces/ADP/pages/32243721/System+Architecture",
+                                "storage": "<h1>Hardware</h1>",
+                                "attachmentsByPageId": {"32243721": []},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPTS_DIR / "run_mcp_export.py"),
+                    "--config",
+                    str(config_path),
+                    "--bundle-json",
+                    str(bundle_path),
+                    "--temp-root",
+                    str(tmp_path / "tmp-export"),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("siteUrl must be a non-empty string", result.stderr)
+
     def test_run_mcp_export_skips_credentials_for_pages_without_diagrams(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -722,7 +798,6 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             config_path.write_text(
                 json.dumps(
                     {
-                        "baseUrl": "https://example.atlassian.net/wiki",
                         "titles": ["Notes"],
                         "outputDir": str(output_dir),
                     }
@@ -733,6 +808,7 @@ class ExportConfluenceDocsTests(unittest.TestCase):
             bundle_path.write_text(
                 json.dumps(
                     {
+                        "siteUrl": "https://example.atlassian.net",
                         "pages": [
                             {
                                 "title": "Notes",

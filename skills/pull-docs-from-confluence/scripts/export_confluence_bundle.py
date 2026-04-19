@@ -57,7 +57,6 @@ class PageProcessingError(Exception):
 
 @dataclass
 class Config:
-    base_url: str
     titles: list[str]
     output_dir: Path
     space_key: str | None
@@ -73,6 +72,11 @@ class DiagramReference:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export Confluence Markdown plus draw.io XML references for Mermaid conversion.",
+    )
+    parser.add_argument(
+        "--site-url",
+        required=True,
+        help="Atlassian site root URL such as https://example.atlassian.net.",
     )
     parser.add_argument(
         "--config",
@@ -101,13 +105,10 @@ def load_config(config_arg: str) -> Config:
     if not isinstance(data, dict):
         raise ConfigError("config must be a JSON object")
 
-    base_url = data.get("baseUrl")
     titles = data.get("titles")
     output_dir = data.get("outputDir", "./docs")
     space_key = data.get("spaceKey")
 
-    if not isinstance(base_url, str) or not base_url.strip():
-        raise ConfigError("baseUrl must be a non-empty string")
     if not isinstance(output_dir, str) or not output_dir.strip():
         raise ConfigError("outputDir must be a non-empty string")
     if not isinstance(titles, list) or not titles:
@@ -117,17 +118,11 @@ def load_config(config_arg: str) -> Config:
     if space_key is not None and (not isinstance(space_key, str) or not space_key.strip()):
         raise ConfigError("spaceKey must be a non-empty string when provided")
 
-    normalized_base = base_url.rstrip("/")
-    parsed = urlparse(normalized_base)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ConfigError("baseUrl must be a valid http(s) URL")
-
     resolved_output = Path(output_dir).expanduser()
     if not resolved_output.is_absolute():
         resolved_output = Path.cwd() / resolved_output
 
     return Config(
-        base_url=normalized_base,
         titles=[title.strip() for title in titles],
         output_dir=resolved_output,
         space_key=space_key.strip() if isinstance(space_key, str) else None,
@@ -148,6 +143,22 @@ def cql_escape(value: str) -> str:
 
 def cql_string_literal(value: str) -> str:
     return f'"{cql_escape(value)}"'
+
+
+def normalize_site_url(raw: Any, field_name: str = "siteUrl") -> str:
+    if not isinstance(raw, str) or not raw.strip():
+        raise ConfigError(f"{field_name} must be a non-empty string")
+    normalized = raw.rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ConfigError(f"{field_name} must be a valid http(s) URL")
+    if parsed.path not in {"", "/"}:
+        raise ConfigError(f"{field_name} must be an Atlassian site root URL")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def confluence_base_url(site_url: str) -> str:
+    return f"{normalize_site_url(site_url)}/wiki"
 
 
 def slugify(value: str) -> str:
@@ -1081,6 +1092,7 @@ def process_title(
     client: ConfluenceClient,
     extractor: DrawioReferenceExtractor,
     config: Config,
+    site_url: str,
     title: str,
     temp_root: Path,
     attachment_cache: dict[str, list[dict[str, Any]]],
@@ -1103,7 +1115,7 @@ def process_title(
     converter = StorageToMarkdownConverter(references)
     markdown = converter.convert(storage)
     version_number = int(((page.get("version") or {}).get("number")) or 0)
-    source = build_page_url(config.base_url, page)
+    source = build_page_url(site_url, page)
 
     output_path = config.output_dir / f"{markdown_output_name(title, page_id)}.md"
     content = page_frontmatter(title, page_id, version_number, source, markdown)
@@ -1153,6 +1165,7 @@ def main() -> int:
     try:
         args = parse_args()
         config = load_config(args.config)
+        site_url = normalize_site_url(args.site_url, field_name="--site-url")
         email, token = require_credentials()
     except (ConfigError, OSError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
@@ -1162,7 +1175,7 @@ def main() -> int:
     temp_root = Path(args.temp_root).expanduser()
     temp_root.mkdir(parents=True, exist_ok=True)
 
-    client = ConfluenceClient(config.base_url, email, token)
+    client = ConfluenceClient(confluence_base_url(site_url), email, token)
     extractor = DrawioReferenceExtractor()
     attachment_cache: dict[str, list[dict[str, Any]]] = {}
     results: list[dict[str, Any]] = []
@@ -1175,6 +1188,7 @@ def main() -> int:
                         client=client,
                         extractor=extractor,
                         config=config,
+                        site_url=site_url,
                         title=title,
                         temp_root=temp_root,
                         attachment_cache=attachment_cache,

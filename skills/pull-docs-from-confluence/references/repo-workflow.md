@@ -5,7 +5,9 @@ Read this file only when repository-specific export layout or rewrite boundaries
 Assume the primary workflow contract already comes from `SKILL.md`:
 
 - `./config.json` in the current working directory is required.
-- `baseUrl`, `titles`, and `outputDir` are required.
+- The MCP bundle passed to `run_mcp_export.py` must include top-level `siteUrl`.
+- `titles` is required.
+- `outputDir` controls the final Markdown destination and defaults to `./docs` when omitted.
 - `spaceKey` is optional.
 - `titles` defines the full export scope.
 

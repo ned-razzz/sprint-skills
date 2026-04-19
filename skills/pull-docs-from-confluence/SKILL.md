@@ -27,7 +27,6 @@ Expected `./config.json` shape:
 
 ```json
 {
-  "baseUrl": "https://<site>.atlassian.net",
   "spaceKey": "OPTIONAL",
   "titles": ["Page Title A", "Page Title B"],
   "outputDir": "docs/confluence"
@@ -36,14 +35,14 @@ Expected `./config.json` shape:
 
 Input contract:
 
-- `baseUrl`: required Confluence site root.
 - `spaceKey`: optional Confluence space filter for page lookup.
 - `titles`: required ordered array of page titles to export. Treat this as the full export scope.
-- `outputDir`: required destination directory for final Markdown files.
+- `outputDir`: destination directory for final Markdown files. When omitted, the scripts default to `./docs`.
 - Do not invent substitute titles, spaces, or output paths when `./config.json` is present.
 
 The script input to `scripts/run_mcp_export.py` is a local bundle JSON assembled from Atlassian MCP output. That bundle must include, for each selected page, the page body plus enough page and attachment metadata for the runner to download and map draw.io XML:
 
+- top-level `siteUrl` from Atlassian MCP accessible resources, for example `https://<site>.atlassian.net`
 - page title, page id, version, and source URL
 - storage body
 - draw.io attachment metadata including attachment id, title, media type, owner page id, and `_links.download`
@@ -53,7 +52,8 @@ The script input to `scripts/run_mcp_export.py` is a local bundle JSON assembled
 - Atlassian MCP must already be available in the current session.
 - This skill does not install, register, or configure Atlassian MCP.
 - `./config.json` must exist in the current working directory and be valid JSON.
-- `baseUrl`, `titles`, and `outputDir` must be present in `./config.json`.
+- The MCP bundle passed to `run_mcp_export.py` must include a valid top-level `siteUrl`.
+- `titles` must be present in `./config.json`.
 - `titles` must contain at least one page title.
 - `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` must already be set before any draw.io XML download step.
 
@@ -72,11 +72,11 @@ The script input to `scripts/run_mcp_export.py` is a local bundle JSON assembled
 
 # Steps
 
-1. Read `./config.json` from the current working directory and use it as the single source of truth for `baseUrl`, `spaceKey`, `titles`, and `outputDir`.
+1. Read `./config.json` from the current working directory and use it as the single source of truth for `spaceKey`, `titles`, and `outputDir`.
 2. Use Atlassian MCP to find exactly one Confluence page for each configured title. Prefer exact title matches and narrow by `spaceKey` when provided.
 3. Use Atlassian MCP to fetch each selected page's storage body, page id, version, and source URL.
-4. Use Atlassian MCP to collect draw.io attachment metadata for each selected page or referenced owner page.
-5. Assemble the MCP results into one local bundle JSON.
+4. Use Atlassian MCP to collect the Atlassian site root URL and collect draw.io attachment metadata for each selected page or referenced owner page.
+5. Assemble the MCP results into one local bundle JSON with top-level `siteUrl`.
 6. Run `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle-json>`.
 7. Let the runner export Markdown placeholders into `outputDir`, download draw.io XML with `curl` into `/tmp/export-confluence-docs/<slug>--<page_id>/`, validate XML, map XML to section markers, render Mermaid with `scripts/render_drawio_mermaid.py`, and rewrite the Markdown document.
 8. Use `scripts/render_mermaid_doc.py --stdout` or `--check` before overwriting files when a safe preview is needed.
@@ -95,6 +95,7 @@ The script input to `scripts/run_mcp_export.py` is a local bundle JSON assembled
 
 - If Atlassian MCP is unavailable, stop and report the blocker.
 - If `./config.json` is missing, invalid, or missing required keys, stop and report the configuration error.
+- If the MCP bundle is missing `siteUrl` or `siteUrl` is not an Atlassian site root URL, stop and report the bundle error.
 - If `titles` is empty, stop and report that the export scope is empty.
 - If a configured title does not resolve to exactly one page, stop and report the ambiguous or missing match.
 - If draw.io XML download is required but `CONFLUENCE_EMAIL` or `CONFLUENCE_API_TOKEN` is missing, stop and report the missing credential.
