@@ -1,21 +1,27 @@
-# Repository Workflow
+# Repository Workflow Details
 
-Use this skill with repositories that provide a current working directory `config.json` describing the Confluence titles to export and the final Markdown output directory.
+Read this file only when repository-specific export layout or rewrite boundaries need clarification beyond `SKILL.md`.
 
-Assume the page body and attachment metadata were retrieved through Atlassian MCP and passed to `scripts/run_mcp_export.py` as bundle JSON. The runner downloads the draw.io bytes locally with `curl` before these repository layout rules are applied.
+Assume the primary workflow contract already comes from `SKILL.md`:
 
-## Export Layout
+- `./config.json` in the current working directory is required.
+- `baseUrl`, `titles`, and `outputDir` are required.
+- `spaceKey` is optional.
+- `titles` defines the full export scope.
+
+This document only clarifies how the repository layout and rewrite markers behave after Atlassian MCP output has been assembled into the bundle JSON passed to `scripts/run_mcp_export.py`.
+
+## Export Layout Details
 
 - Read `./config.json` from the current working directory before deciding export targets.
-- When `config.json` is present and valid, export only the page titles listed in `titles`.
-- Final Markdown documents live at `<outputDir>/*.md`, where `outputDir` comes from `config.json`.
+- Export only the page titles listed in `titles`.
+- Final Markdown documents live at `<outputDir>/<slug>.md`.
 - Each exported document includes `confluence_page_id` in YAML front matter.
-- Temporary XML lives at `/tmp/export-confluence-docs/<markdown-stem>--<confluence_page_id>/`.
+- Temporary XML lives at `/tmp/export-confluence-docs/<slug>--<page_id>/`.
 - XML files come from draw.io attachments discovered through Atlassian MCP metadata and downloaded only with `curl` plus Confluence credentials.
 - XML files are normalized to `<diagram-slug>.xml` when the Confluence macro exposes `diagramName`.
-- If `config.json` is missing or invalid, surface that condition and stop.
 
-## Placeholder Contract
+## Placeholder Details
 
 - Raw Markdown draw.io sections are represented by:
   `<!-- confluence-drawio diagram="..." diagram_slug="..." owner_page_id="..." source="..." -->`
@@ -26,7 +32,7 @@ Assume the page body and attachment metadata were retrieved through Atlassian MC
 - After Mermaid rendering, replace the placeholder block with the rendered marker plus Mermaid block.
 - Any unmatched or unused XML file is a hard failure.
 
-## Rewrite Policy
+## Rewrite Boundaries
 
 - Preserve front matter.
 - Preserve all heading lines and order.

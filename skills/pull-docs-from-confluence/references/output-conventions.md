@@ -1,4 +1,6 @@
-# Output Conventions
+# Output Conventions Details
+
+Read this file only when Mermaid formatting rules need clarification beyond `SKILL.md`.
 
 ## Node Identity
 

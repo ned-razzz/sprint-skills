@@ -1,6 +1,8 @@
-# Diagram Scope
+# Diagram Scope Details
 
-The deterministic engine supports architecture-style draw.io documents only.
+Read this file only when the supported diagram scope or fail-instead-of-guessing rules need clarification beyond `SKILL.md`.
+
+The deterministic renderer supports architecture-style draw.io documents only.
 
 ## Supported Inputs
 
@@ -25,7 +27,7 @@ Fail the document when the XML contains meaning that cannot be safely preserved 
 - Overlapping container semantics that are not strictly nested
 - Explicitly state/class-like labels such as `[*]` or `<<...>>`
 
-## Repository Guidance
+## Repository Examples
 
 - `Hardware Architecture` should render as `flowchart TB`.
 - `Software Architecture` should render as `flowchart TB`.
