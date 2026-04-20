@@ -1,10 +1,6 @@
 {
-    "titles": [
-        "System Architecture",
-        "System Requirements",
-        "State Machine Diagram",
-        "Directory Structure"
-    ],
-    "spaceKey": "ADP",
+    "siteUrl": "https://example.atlassian.net/",
+    "titles": ["Page Title A", "Page Title B"],
+    "spaceKey": "OPTIONAL",
     "outputDir": "./docs"
 }

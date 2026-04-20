@@ -9,7 +9,7 @@ Use this skill when the repository's current working directory contains a `./con
 
 Use this skill for the sequential REST workflow:
 
-- Step 1 checks the local environment: `./config.json`, Atlassian MCP availability, and `CONFLUENCE_EMAIL` plus `CONFLUENCE_API_TOKEN`.
+- Step 1 checks the local environment: `./config.json`, and `CONFLUENCE_EMAIL` plus `CONFLUENCE_API_TOKEN`.
 - Step 2 runs `python3 scripts/fetch_confluence_metatdata.py --config ./config.json` to resolve selected pages and write `./bundle.json`.
 - Step 3 runs `python3 scripts/export_confluence_assets.py --config ./config.json --bundle ./bundle.json` to export Markdown drafts and draw.io XML.
 - Step 4 runs `python3 scripts/render_drawio_to_mermaid.py --doc <markdownPath>` for each Markdown file produced in step 3.
@@ -46,8 +46,6 @@ Input contract:
 
 # Preconditions
 
-- Atlassian MCP must already be available in the current session.
-- This skill does not install, register, or configure Atlassian MCP.
 - `./config.json` must exist in the current working directory and be valid JSON.
 - `siteUrl` in `./config.json` must be a valid Atlassian site root URL.
 - `titles` must be present in `./config.json`.
@@ -70,8 +68,7 @@ Input contract:
 # Steps
 
 1. Check the environment before running any export command:
-   - confirm `./config.json` exists and includes `titles`, `spaceKey`, and `outputDir`
-   - confirm Atlassian MCP is reachable in the current session
+   - confirm `./config.json` exists and includes `siteUrl`, `titles`, `spaceKey`, and `outputDir`
    - confirm `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` are set
 2. Run `python3 scripts/fetch_confluence_metatdata.py --config ./config.json`.
    - This script uses Confluence REST, resolves exactly one selected page for each configured title, collects page storage and attachment metadata, and writes `./bundle.json`.
@@ -100,7 +97,6 @@ Input contract:
 
 # Failure handling
 
-- If Atlassian MCP is unavailable, stop and report the blocker during step 1.
 - If `./config.json` is missing, invalid, or missing required keys, stop and report the configuration error during step 1.
 - If `titles` is empty, stop and report that the export scope is empty.
 - If `CONFLUENCE_EMAIL` or `CONFLUENCE_API_TOKEN` is missing, stop and report the missing credential during step 1.

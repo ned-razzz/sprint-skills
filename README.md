@@ -24,6 +24,7 @@ Before using the `pull-docs-from-confluence` skill, ensure your environment meet
 - **Project Configuration**: A `config.json` file must exist in your current working directory to define the export scope:
   ```json
   {
+    "siteUrl": "https://example.atlassian.net/",
     "titles": ["Page Title A", "Page Title B"],
     "spaceKey": "OPTIONAL",
     "outputDir": "docs/confluence"
