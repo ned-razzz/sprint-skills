@@ -5,13 +5,13 @@ Read this file only when repository-specific export layout or rewrite boundaries
 Assume the primary workflow contract already comes from `SKILL.md`:
 
 - `./config.json` in the current working directory is required.
-- The MCP bundle passed to `run_mcp_export.py` must include top-level `siteUrl`.
-- `titles` is required.
-- `outputDir` controls the final Markdown destination and defaults to `./docs` when omitted.
+- `siteUrl`, `titles`, and `outputDir` are required in `./config.json`.
 - `spaceKey` is optional.
 - `titles` defines the full export scope.
+- `scripts/fetch_confluence_metatdata.py` writes `./bundle.json`.
+- `scripts/export_confluence_assets.py` reads `./bundle.json` and emits Markdown plus XML assets.
 
-This document only clarifies how the repository layout and rewrite markers behave after Atlassian MCP output has been assembled into the bundle JSON passed to `scripts/run_mcp_export.py`, and after any missing metadata has been backfilled through Confluence REST.
+This document only clarifies how the repository layout and rewrite markers behave after step 2 has written `./bundle.json`, and after step 3 has exported Markdown drafts and draw.io XML.
 
 ## Export Layout Details
 
@@ -20,7 +20,7 @@ This document only clarifies how the repository layout and rewrite markers behav
 - Final Markdown documents live at `<outputDir>/<slug>.md`.
 - Each exported document includes `confluence_page_id` in YAML front matter.
 - Temporary XML lives at `/tmp/export-confluence-docs/<slug>--<page_id>/`.
-- XML files come from draw.io attachments discovered through MCP metadata when available, with missing attachment metadata backfilled through Confluence REST, and downloaded only with `curl` plus Confluence credentials.
+- XML files come from draw.io attachments discovered through the metadata fetch step and downloaded only with `curl` plus Confluence credentials.
 - XML files are normalized to `<diagram-slug>.xml` when the Confluence macro exposes `diagramName`.
 
 ## Placeholder Details

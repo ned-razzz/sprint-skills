@@ -392,20 +392,8 @@ def render_mermaid(xml_path: Path) -> str:
     return "\n".join(lines)
 
 
-def rendered_marker(attrs: dict[str, str], xml_name: str) -> str:
-    ordered = {
-        "diagram": attrs.get("diagram", ""),
-        "diagram_slug": attrs.get("diagram_slug", ""),
-        "owner_page_id": attrs.get("owner_page_id", ""),
-        "source": attrs.get("source", ""),
-        "xml": xml_name,
-    }
-    parts = [f'{key}="{value.replace(chr(34), "&quot;")}"' for key, value in ordered.items()]
-    return f"<!-- confluence-drawio-rendered {' '.join(parts)} -->"
-
-
-def render_marker_block(attrs: dict[str, str], xml_name: str, mermaid: str) -> str:
-    return f'{rendered_marker(attrs, xml_name)}\n```mermaid\n{mermaid.rstrip()}\n```\n'
+def render_marker_block(mermaid: str) -> str:
+    return f"```mermaid\n{mermaid.rstrip()}\n```\n"
 
 
 def render_document(doc_path: Path, xml_dir: Path) -> str:
@@ -431,7 +419,7 @@ def render_document(doc_path: Path, xml_dir: Path) -> str:
         used_xml_names.add(xml_name)
         if xml_name not in rendered_by_name:
             rendered_by_name[xml_name] = render_mermaid(xml_dir / xml_name)
-        output_parts.append(render_marker_block(marker.attrs, xml_name, rendered_by_name[xml_name]))
+        output_parts.append(render_marker_block(rendered_by_name[xml_name]))
         cursor = marker.end
 
     output_parts.append(body[cursor:])

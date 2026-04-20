@@ -7,11 +7,13 @@ description: Pull selected Confluence pages into repository Markdown files based
 
 Use this skill when the repository's current working directory contains a `./config.json` that defines which Confluence pages to export and where the final Markdown should be written.
 
-Use this skill for the MCP-assisted workflow:
+Use this skill for the sequential REST workflow:
 
-- Atlassian MCP provides `siteUrl` and any available page metadata.
-- `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle-json>` backfills missing storage and attachment metadata through Confluence REST, then performs export and rewrite.
-- `curl` downloads draw.io XML because neither Atlassian MCP nor the bundle includes attachment bytes.
+- Step 1 checks the local environment: `./config.json`, Atlassian MCP availability, and `CONFLUENCE_EMAIL` plus `CONFLUENCE_API_TOKEN`.
+- Step 2 runs `python3 scripts/fetch_confluence_metatdata.py --config ./config.json` to resolve selected pages and write `./bundle.json`.
+- Step 3 runs `python3 scripts/export_confluence_assets.py --config ./config.json --bundle-json ./bundle.json` to export Markdown drafts and draw.io XML.
+- Step 4 runs `python3 scripts/render_drawio_to_mermaid.py --doc <markdownPath>` for each Markdown file produced in step 3.
+- Step 5 verifies that the whole workflow completed with no failed pages and no pending Mermaid rewrites.
 
 Read reference files only when the current task needs details that are not already explicit in this SKILL.md.
 
@@ -27,44 +29,37 @@ Expected `./config.json` shape:
 
 ```json
 {
-  "spaceKey": "OPTIONAL",
+  "siteUrl": "https://<site>.atlassian.net/",
   "titles": ["Page Title A", "Page Title B"],
+  "spaceKey": "OPTIONAL",
   "outputDir": "docs/confluence"
 }
 ```
 
 Input contract:
 
-- `spaceKey`: optional Confluence space filter for page lookup.
+- `siteUrl`: required Atlassian site root URL used by the REST scripts.
 - `titles`: required ordered array of page titles to export. Treat this as the full export scope.
-- `outputDir`: destination directory for final Markdown files. When omitted, the scripts default to `./docs`.
-- Do not invent substitute titles, spaces, or output paths when `./config.json` is present.
-
-The script input to `scripts/run_mcp_export.py` is a local bundle JSON assembled from Atlassian MCP output. The bundle may be partial. The runner uses MCP-provided fields first and backfills missing metadata through Confluence REST. The minimum useful bundle is:
-
-- top-level `siteUrl` from Atlassian MCP accessible resources, for example `https://<site>.atlassian.net`
-- page title for each configured export target
-
-When available from MCP, the runner also consumes:
-
-- page id, version, and source URL
-- storage body
-- draw.io attachment metadata including attachment id, title, media type, owner page id, and `_links.download`
+- `spaceKey`: optional Confluence space filter for page lookup.
+- `outputDir`: required destination directory for final Markdown files.
+- Do not invent substitute titles, spaces, site URLs, or output paths when `./config.json` is present.
 
 # Preconditions
 
 - Atlassian MCP must already be available in the current session.
 - This skill does not install, register, or configure Atlassian MCP.
 - `./config.json` must exist in the current working directory and be valid JSON.
-- The MCP bundle passed to `run_mcp_export.py` must include a valid top-level `siteUrl`.
+- `siteUrl` in `./config.json` must be a valid Atlassian site root URL.
 - `titles` must be present in `./config.json`.
 - `titles` must contain at least one page title.
-- `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` must already be set before any REST backfill or draw.io XML download step.
+- `outputDir` must be present in `./config.json`.
+- `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` must already be set before any metadata fetch, asset export, or draw.io XML download step.
 
 # Output
 
-- Final Markdown path: `<outputDir>/<slug>.md`
-- Temporary XML path: `/tmp/export-confluence-docs/<slug>--<page_id>/`
+- Step 2 writes `./bundle.json` in the current working directory.
+- Step 3 writes final Markdown drafts to `<outputDir>/<slug>.md`.
+- Step 3 writes temporary XML to `/tmp/export-confluence-docs/<slug>--<page_id>/`.
 - Each exported Markdown document should preserve front matter and headings.
 - Each exported Markdown document should include `confluence_page_id` in YAML front matter.
 - Raw draw.io sections are represented by:
@@ -76,32 +71,44 @@ When available from MCP, the runner also consumes:
 
 # Steps
 
-1. Read `./config.json` from the current working directory and use it as the single source of truth for `spaceKey`, `titles`, and `outputDir`.
-2. Use Atlassian MCP to collect `siteUrl` and any available page metadata for the configured titles.
-3. Assemble the MCP results into one local bundle JSON with top-level `siteUrl`.
-4. Run `python3 scripts/run_mcp_export.py --config ./config.json --bundle-json <bundle-json>`.
-5. Let the runner fill missing page storage, source URL, version, and attachment metadata through Confluence REST for each selected page or referenced owner page.
-6. Let the runner export Markdown placeholders into `outputDir`, download draw.io XML with `curl` into `/tmp/export-confluence-docs/<slug>--<page_id>/`, validate XML, map XML to section markers, render Mermaid with `scripts/render_drawio_mermaid.py`, and rewrite the Markdown document.
-7. Use `scripts/render_mermaid_doc.py --stdout` or `--check` before overwriting files when a safe preview is needed.
+1. Check the environment before running any export command:
+   - confirm `./config.json` exists and includes `siteUrl`, `titles`, and `outputDir`
+   - confirm Atlassian MCP is reachable in the current session
+   - confirm `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` are set
+2. Run `python3 scripts/fetch_confluence_metatdata.py --config ./config.json`.
+   - This script uses Confluence REST, resolves exactly one selected page for each configured title, collects page storage and attachment metadata, and writes `./bundle.json`.
+   - Treat `./bundle.json` as the only bundle input for the next step.
+3. Run `python3 scripts/export_confluence_assets.py --config ./config.json --bundle-json ./bundle.json`.
+   - This script exports Markdown placeholders into `outputDir`, downloads draw.io XML with `curl` into `/tmp/export-confluence-docs/<slug>--<page_id>/`, and prints a JSON summary.
+   - Use `results[].markdownPath` from that summary as the document list for the next step.
+4. For each Markdown file produced in step 3, run `python3 scripts/render_drawio_to_mermaid.py --doc <markdownPath>`.
+   - Use the default XML directory unless a custom `--xml-dir` is required.
+   - Pages with no draw.io XML may remain unchanged; that is still a successful render pass.
+5. Verify completion.
+   - Step 3 summary must report `failed = 0`.
+   - Every configured title must produce one Markdown file at `<outputDir>/<slug>.md`.
+   - Re-run `python3 scripts/render_drawio_to_mermaid.py --doc <markdownPath> --check` for each generated document when a final no-op verification is needed.
 
 # Success criteria
 
 - Every title in `./config.json` resolves to exactly one selected Confluence page.
+- Step 2 writes exactly one `./bundle.json` for the configured export scope.
 - Every selected page produces exactly one Markdown file at `<outputDir>/<slug>.md`.
 - Pages without draw.io diagrams remain valid Markdown exports.
-- Pages with supported draw.io diagrams replace placeholder section bodies with a `confluence-drawio-rendered` marker followed by a Mermaid block.
+- Pages with supported draw.io diagrams replace placeholder section bodies with Mermaid blocks.
 - No XML file remains unmatched or ambiguously matched to section markers.
 - The final documents preserve source meaning, front matter, and heading structure.
 - The workflow completes without inventing missing data or hand-writing Mermaid from XML.
 
 # Failure handling
 
-- If Atlassian MCP is unavailable, stop and report the blocker.
-- If `./config.json` is missing, invalid, or missing required keys, stop and report the configuration error.
-- If the MCP bundle is missing `siteUrl` or `siteUrl` is not an Atlassian site root URL, stop and report the bundle error.
+- If Atlassian MCP is unavailable, stop and report the blocker during step 1.
+- If `./config.json` is missing, invalid, or missing required keys, stop and report the configuration error during step 1.
+- If `siteUrl` is missing or not an Atlassian site root URL, stop and report the configuration error during step 1.
 - If `titles` is empty, stop and report that the export scope is empty.
-- If a configured title does not resolve to exactly one page, stop and report the ambiguous or missing match.
-- If REST backfill or draw.io XML download is required but `CONFLUENCE_EMAIL` or `CONFLUENCE_API_TOKEN` is missing, stop and report the missing credential.
+- If `CONFLUENCE_EMAIL` or `CONFLUENCE_API_TOKEN` is missing, stop and report the missing credential during step 1.
+- If step 2 fails to resolve a configured title to exactly one page, stop and report the ambiguous or missing match.
+- If step 3 fails for any configured title, do not claim workflow success.
 - If one section contains multiple draw.io markers, stop and report the mismatch instead of guessing.
 - If any XML file cannot be matched to exactly one section marker, stop and report the mismatch instead of guessing.
 - If the deterministic renderer cannot safely preserve the meaning of a diagram, fail that document instead of guessing.
