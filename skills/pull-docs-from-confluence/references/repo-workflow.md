@@ -27,11 +27,9 @@ This document only clarifies how the repository layout and rewrite markers behav
 
 - Raw Markdown draw.io sections are represented by:
   `<!-- confluence-drawio diagram="..." diagram_slug="..." owner_page_id="..." source="..." -->`
-- Rendered Mermaid sections are represented by:
-  `<!-- confluence-drawio-rendered diagram="..." diagram_slug="..." owner_page_id="..." source="..." xml="..." -->`
 - `diagram_slug` is the primary section-to-XML key.
 - One heading section must contain at most one draw.io marker.
-- After Mermaid rendering, replace the placeholder block with the rendered marker plus Mermaid block.
+- After Mermaid rendering, replace the placeholder block with the Mermaid block.
 - Any unmatched or unused XML file is a hard failure.
 
 ## Rewrite Boundaries
@@ -39,4 +37,4 @@ This document only clarifies how the repository layout and rewrite markers behav
 - Preserve front matter.
 - Preserve all heading lines and order.
 - Replace only the draw.io block inside sections that contain a draw.io marker.
-- Re-run safely only on sections that already contain a `confluence-drawio-rendered` marker.
+- Re-run only on documents that still contain `confluence-drawio` placeholders.

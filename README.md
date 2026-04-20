@@ -4,9 +4,8 @@ This repository provides specialized skills for the Gemini CLI to automate and s
 # Skill List
 - **pull-docs-from-confluence**: Synchronizes selected Confluence pages into repository Markdown files. It uses a deterministic rendering engine that converts draw.io diagrams into Mermaid flowcharts so technical diagrams can be maintained as code alongside the documentation.
 
-# pull-docs-from-confluence Installation
-
-## Prerequisites
+# Prerequisites
+## pull-docs-from-confluence 
 Before using the `pull-docs-from-confluence` skill, ensure your environment meets the following requirements:
 
 - **Confluence Access**: Atlassian MCP must be available for environment validation, and the REST workflow uses `siteUrl` from `config.json`.
@@ -25,14 +24,14 @@ Before using the `pull-docs-from-confluence` skill, ensure your environment meet
 - **Project Configuration**: A `config.json` file must exist in your current working directory to define the export scope:
   ```json
   {
-    "siteUrl": "https://<site>.atlassian.net/",
     "titles": ["Page Title A", "Page Title B"],
     "spaceKey": "OPTIONAL",
     "outputDir": "docs/confluence"
   }
   ```
 
-## pull-docs-from-confluence Workflow
+# Workflow
+## pull-docs-from-confluence
 
 1. Check the environment: `config.json`, Atlassian MCP, and `CONFLUENCE_EMAIL` plus `CONFLUENCE_API_TOKEN`.
 2. Run `python3 scripts/fetch_confluence_metatdata.py --config ./config.json`.

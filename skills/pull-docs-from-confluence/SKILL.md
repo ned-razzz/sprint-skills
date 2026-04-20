@@ -11,7 +11,7 @@ Use this skill for the sequential REST workflow:
 
 - Step 1 checks the local environment: `./config.json`, Atlassian MCP availability, and `CONFLUENCE_EMAIL` plus `CONFLUENCE_API_TOKEN`.
 - Step 2 runs `python3 scripts/fetch_confluence_metatdata.py --config ./config.json` to resolve selected pages and write `./bundle.json`.
-- Step 3 runs `python3 scripts/export_confluence_assets.py --config ./config.json --bundle-json ./bundle.json` to export Markdown drafts and draw.io XML.
+- Step 3 runs `python3 scripts/export_confluence_assets.py --config ./config.json --bundle ./bundle.json` to export Markdown drafts and draw.io XML.
 - Step 4 runs `python3 scripts/render_drawio_to_mermaid.py --doc <markdownPath>` for each Markdown file produced in step 3.
 - Step 5 verifies that the whole workflow completed with no failed pages and no pending Mermaid rewrites.
 
@@ -63,22 +63,20 @@ Input contract:
 - Each exported Markdown document should preserve front matter and headings.
 - Each exported Markdown document should include `confluence_page_id` in YAML front matter.
 - Raw draw.io sections are represented by:
-  `<!-- confluence-drawio diagram="..." diagram_slug="..." owner_page_id="..." source="..." -->`
-- Rendered Mermaid sections are represented by:
-  `<!-- confluence-drawio-rendered diagram="..." diagram_slug="..." owner_page_id="..." source="..." xml="..." -->`
+  `<!-- confluence-drawio diagram_slug="..." owner_page_id="..." source="..." -->`
 - `diagram_slug` is the primary key for matching section markers to XML files.
 - Pages without draw.io diagrams should remain plain Markdown exports with no Mermaid conversion.
 
 # Steps
 
 1. Check the environment before running any export command:
-   - confirm `./config.json` exists and includes `siteUrl`, `titles`, and `outputDir`
+   - confirm `./config.json` exists and includes `titles`, `spaceKey`, and `outputDir`
    - confirm Atlassian MCP is reachable in the current session
    - confirm `CONFLUENCE_EMAIL` and `CONFLUENCE_API_TOKEN` are set
 2. Run `python3 scripts/fetch_confluence_metatdata.py --config ./config.json`.
    - This script uses Confluence REST, resolves exactly one selected page for each configured title, collects page storage and attachment metadata, and writes `./bundle.json`.
    - Treat `./bundle.json` as the only bundle input for the next step.
-3. Run `python3 scripts/export_confluence_assets.py --config ./config.json --bundle-json ./bundle.json`.
+3. Run `python3 scripts/export_confluence_assets.py --config ./config.json --bundle ./bundle.json`.
    - This script exports Markdown placeholders into `outputDir`, downloads draw.io XML with `curl` into `/tmp/export-confluence-docs/<slug>--<page_id>/`, and prints a JSON summary.
    - Use `results[].markdownPath` from that summary as the document list for the next step.
 4. For each Markdown file produced in step 3, run `python3 scripts/render_drawio_to_mermaid.py --doc <markdownPath>`.
@@ -104,7 +102,6 @@ Input contract:
 
 - If Atlassian MCP is unavailable, stop and report the blocker during step 1.
 - If `./config.json` is missing, invalid, or missing required keys, stop and report the configuration error during step 1.
-- If `siteUrl` is missing or not an Atlassian site root URL, stop and report the configuration error during step 1.
 - If `titles` is empty, stop and report that the export scope is empty.
 - If `CONFLUENCE_EMAIL` or `CONFLUENCE_API_TOKEN` is missing, stop and report the missing credential during step 1.
 - If step 2 fails to resolve a configured title to exactly one page, stop and report the ambiguous or missing match.

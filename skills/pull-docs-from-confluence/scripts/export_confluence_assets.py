@@ -894,7 +894,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to the current working directory config.json.",
     )
     parser.add_argument(
-        "--bundle-json",
+        "--bundle",
         required=True,
         help="Path to bundle.json, or '-' to read from stdin.",
     )
@@ -1152,7 +1152,7 @@ def main() -> int:
     try:
         args = parse_args()
         config = load_config(args.config)
-        bundle = load_bundle(args.bundle_json)
+        bundle = load_bundle(args.bundle)
         email, token = require_credentials()
         pages_by_title = index_bundle_pages(bundle)
     except (ConfigError, OSError, ValueError) as exc:

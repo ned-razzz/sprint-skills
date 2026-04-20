@@ -19,10 +19,6 @@ PLACEHOLDER_RE = re.compile(
     r'<!--\s*confluence-drawio(?!-rendered)\b(?P<attrs>.*?)-->\s*',
     re.IGNORECASE | re.DOTALL,
 )
-RENDERED_RE = re.compile(
-    r'<!--\s*confluence-drawio-rendered\b(?P<attrs>.*?)-->\s*```mermaid\n.*?\n```\n?',
-    re.IGNORECASE | re.DOTALL,
-)
 TAG_RE = re.compile(r"<[^>]+>")
 BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 NON_WORD_RE = re.compile(r"[^a-z0-9]+")
@@ -30,7 +26,6 @@ NON_WORD_RE = re.compile(r"[^a-z0-9]+")
 
 @dataclass(frozen=True)
 class MarkerMatch:
-    mode: str
     attrs: dict[str, str]
     start: int
     end: int
@@ -94,13 +89,9 @@ def parse_attrs(raw: str) -> dict[str, str]:
 
 def collect_markers(body: str) -> list[MarkerMatch]:
     markers = [
-        MarkerMatch("placeholder", parse_attrs(match.group("attrs")), match.start(), match.end())
+        MarkerMatch(parse_attrs(match.group("attrs")), match.start(), match.end())
         for match in PLACEHOLDER_RE.finditer(body)
     ]
-    markers.extend(
-        MarkerMatch("rendered", parse_attrs(match.group("attrs")), match.start(), match.end())
-        for match in RENDERED_RE.finditer(body)
-    )
     markers.sort(key=lambda marker: (marker.start, marker.end))
 
     previous_end = -1
