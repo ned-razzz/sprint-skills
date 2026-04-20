@@ -17,6 +17,10 @@ from urllib.parse import urljoin, urlparse
 import requests
 from lxml import etree
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 AC_NS = "http://atlassian.com/content"
 RI_NS = "http://atlassian.com/resource/identifier"
 NSMAP = {"ac": AC_NS, "ri": RI_NS}
@@ -69,39 +73,12 @@ class DiagramReference:
     source: str
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Export Confluence Markdown plus draw.io XML references for Mermaid conversion.",
-    )
-    parser.add_argument(
-        "--site-url",
-        required=True,
-        help="Atlassian site root URL such as https://example.atlassian.net.",
-    )
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="Path to a JSON config file, or '-' to read from stdin.",
-    )
-    parser.add_argument(
-        "--temp-root",
-        default=str(TEMP_ROOT),
-        help="Base temporary directory for exported draw.io XML.",
-    )
-    return parser.parse_args()
-
-
 def load_config(config_arg: str) -> Config:
-    if config_arg == "-":
-        raw = sys.stdin.read()
-    else:
-        raw = Path(config_arg).read_text(encoding="utf-8")
-
+    raw = sys.stdin.read() if config_arg == "-" else Path(config_arg).read_text(encoding="utf-8")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ConfigError(f"invalid JSON config: {exc}") from exc
-
     if not isinstance(data, dict):
         raise ConfigError("config must be a JSON object")
 
@@ -221,41 +198,6 @@ def site_root(base_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
-def build_page_url(base_url: str, page: dict[str, Any]) -> str:
-    links = page.get("_links") or {}
-    webui = links.get("webui")
-    if isinstance(webui, str) and webui:
-        return urljoin(site_root(base_url), webui)
-    return base_url
-
-
-def debug_enabled() -> bool:
-    value = os.environ.get("CONFLUENCE_DEBUG", "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
-
-
-def debug_log(message: str) -> None:
-    if debug_enabled():
-        print(f"[confluence-debug] {message}", file=sys.stderr)
-
-
-def choose_page(title: str, pages: list[dict[str, Any]]) -> dict[str, Any]:
-    exact_matches = [
-        page
-        for page in pages
-        if isinstance(page.get("title"), str) and page["title"].strip() == title.strip()
-    ]
-    if not exact_matches:
-        raise PageProcessingError(f"no exact title match found for '{title}'")
-    return max(
-        exact_matches,
-        key=lambda page: (
-            parse_confluence_datetime((page.get("version") or {}).get("when")),
-            int((page.get("version") or {}).get("number") or 0),
-        ),
-    )
-
-
 def page_frontmatter(
     title: str,
     page_id: str,
@@ -306,8 +248,6 @@ class ConfluenceClient:
 
     def _request(self, path: str, params: dict[str, Any] | None = None) -> requests.Response:
         url = f"{self.base_url}{path}"
-        prepared = requests.Request("GET", url, params=params).prepare()
-        debug_log(f"GET {prepared.url}")
         try:
             response = self.session.get(url, params=params, timeout=30)
         except requests.RequestException as exc:
@@ -326,55 +266,6 @@ class ConfluenceClient:
                 ) from exc
             raise PageProcessingError(f"request failed for {url}: {exc}") from exc
         return response
-
-    def _get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self._request(path, params=params)
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise PageProcessingError(f"invalid JSON response for {response.url}: {exc}") from exc
-        if not isinstance(data, dict):
-            raise PageProcessingError(f"unexpected response payload for {response.url}")
-        return data
-
-    def search_pages(self, title: str, space_key: str | None) -> list[dict[str, Any]]:
-        title_clause = f"title = {cql_string_literal(title)}"
-        cql_parts = ["type = page", title_clause]
-        if space_key:
-            cql_parts.append(f"space = {cql_string_literal(space_key)}")
-        payload = self._get_json(
-            "/rest/api/content/search",
-            params={"cql": " AND ".join(cql_parts), "limit": 100},
-        )
-        results = payload.get("results", [])
-        if not isinstance(results, list):
-            raise PageProcessingError("unexpected search response: results is not a list")
-        return [item for item in results if isinstance(item, dict)]
-
-    def fetch_page(self, page_id: str) -> dict[str, Any]:
-        return self._get_json(
-            f"/rest/api/content/{page_id}",
-            params={"expand": "body.storage,version"},
-        )
-
-    def list_attachments(self, page_id: str) -> list[dict[str, Any]]:
-        attachments: list[dict[str, Any]] = []
-        start = 0
-        limit = 200
-        while True:
-            payload = self._get_json(
-                f"/rest/api/content/{page_id}/child/attachment",
-                params={"limit": limit, "start": start},
-            )
-            page_results = payload.get("results", [])
-            if not isinstance(page_results, list):
-                raise PageProcessingError(
-                    f"unexpected attachment response for page {page_id}: results is not a list"
-                )
-            attachments.extend(item for item in page_results if isinstance(item, dict))
-            if len(page_results) < limit:
-                return attachments
-            start += limit
 
     def download_attachment(self, download_path: str) -> bytes:
         response = self._request(download_path)
@@ -779,7 +670,6 @@ class StorageToMarkdownConverter:
 
     def _render_table(self, node: etree._Element) -> str:
         rows: list[list[str]] = []
-        first_row_has_header = False
         for row in node.xpath(".//*[local-name()='tr']"):
             rendered_row: list[str] = []
             header_flags: list[bool] = []
@@ -790,8 +680,6 @@ class StorageToMarkdownConverter:
                 rendered_row.append(self._escape_table_cell(self._render_inline_children(cell)))
                 header_flags.append(name == "th")
             if rendered_row:
-                if not rows:
-                    first_row_has_header = any(header_flags)
                 rows.append(rendered_row)
         if not rows:
             return ""
@@ -986,171 +874,6 @@ def unique_output_path(path: Path) -> Path:
         index += 1
 
 
-def attachments_for_page(
-    client: ConfluenceClient,
-    attachment_cache: dict[str, list[dict[str, Any]]],
-    page_id: str,
-) -> list[dict[str, Any]]:
-    cached = attachment_cache.get(page_id)
-    if cached is not None:
-        return cached
-    attachments = client.list_attachments(page_id)
-    attachment_cache[page_id] = attachments
-    return attachments
-
-
-def export_drawio_xml(
-    client: ConfluenceClient,
-    references: list[DiagramReference],
-    page_id: str,
-    temp_xml_dir: Path,
-    attachment_cache: dict[str, list[dict[str, Any]]],
-) -> tuple[list[dict[str, Any]], list[str]]:
-    saved: list[dict[str, Any]] = []
-    warnings: list[str] = []
-    processed_attachment_ids: set[str] = set()
-
-    if references:
-        for reference in references:
-            owner_page_id = reference.owner_page_id or page_id
-            attachments = attachments_for_page(client, attachment_cache, owner_page_id)
-            attachment = find_matching_attachment(attachments, reference.diagram_name)
-            if attachment is None:
-                warnings.append(
-                    f"diagram attachment not found for '{reference.diagram_name}' "
-                    f"(ownerPageId={owner_page_id}, source={reference.source})"
-                )
-                continue
-            attachment_id = str(attachment.get("id") or "")
-            if not attachment_id or attachment_id in processed_attachment_ids:
-                continue
-            download_path = download_path_of_attachment(attachment)
-            if not download_path:
-                warnings.append(
-                    f"attachment download link missing for '{reference.diagram_name}' "
-                    f"(ownerPageId={owner_page_id})"
-                )
-                continue
-            filename = normalized_xml_filename(
-                diagram_name=reference.diagram_name,
-                attachment_title=str(attachment.get("title") or reference.diagram_name),
-            )
-            output_path = unique_output_path(temp_xml_dir / filename)
-            content = client.download_attachment(download_path)
-            ensure_xml_content(content, str(attachment.get("title") or reference.diagram_name))
-            output_path.write_bytes(content)
-            processed_attachment_ids.add(attachment_id)
-            saved.append(
-                {
-                    "diagramName": reference.diagram_name,
-                    "diagramSlug": mermaid_slug(reference.diagram_name),
-                    "attachmentTitle": str(attachment.get("title") or ""),
-                    "attachmentId": attachment_id,
-                    "ownerPageId": owner_page_id,
-                    "downloadUrl": build_attachment_download_url(client.base_url, attachment),
-                    "path": str(output_path),
-                    "xml": output_path.name,
-                    "source": reference.source,
-                }
-            )
-    else:
-        attachments = attachments_for_page(client, attachment_cache, page_id)
-        for attachment in find_fallback_drawio_attachments(attachments):
-            attachment_id = str(attachment.get("id") or "")
-            if not attachment_id or attachment_id in processed_attachment_ids:
-                continue
-            download_path = download_path_of_attachment(attachment)
-            if not download_path:
-                continue
-            title = str(attachment.get("title") or "diagram")
-            output_path = unique_output_path(
-                temp_xml_dir / normalized_xml_filename("diagram", title)
-            )
-            content = client.download_attachment(download_path)
-            ensure_xml_content(content, title)
-            output_path.write_bytes(content)
-            processed_attachment_ids.add(attachment_id)
-            saved.append(
-                {
-                    "diagramName": title,
-                    "diagramSlug": mermaid_slug(Path(title).stem),
-                    "attachmentTitle": title,
-                    "attachmentId": attachment_id,
-                    "ownerPageId": page_id,
-                    "downloadUrl": build_attachment_download_url(client.base_url, attachment),
-                    "path": str(output_path),
-                    "xml": output_path.name,
-                    "source": "attachment-fallback",
-                }
-            )
-        if not saved:
-            warnings.append("no draw.io references or matching draw.io attachments found")
-    return saved, warnings
-
-
-def process_title(
-    client: ConfluenceClient,
-    extractor: DrawioReferenceExtractor,
-    config: Config,
-    site_url: str,
-    title: str,
-    temp_root: Path,
-    attachment_cache: dict[str, list[dict[str, Any]]],
-) -> dict[str, Any]:
-    pages = client.search_pages(title, config.space_key)
-    selected = choose_page(title, pages)
-    page_id = str(selected.get("id") or "")
-    if not page_id:
-        raise PageProcessingError(f"missing page id for '{title}'")
-
-    page = client.fetch_page(page_id)
-    storage = (((page.get("body") or {}).get("storage") or {}).get("value")) or ""
-    if not isinstance(storage, str):
-        raise PageProcessingError(f"missing body.storage for '{title}'")
-
-    references = extractor.extract(storage)
-    temp_xml_dir = temp_root / page_directory_name(title, page_id)
-    clean_temp_dir(temp_xml_dir)
-
-    converter = StorageToMarkdownConverter(references)
-    markdown = converter.convert(storage)
-    version_number = int(((page.get("version") or {}).get("number")) or 0)
-    source = build_page_url(site_url, page)
-
-    output_path = config.output_dir / f"{markdown_output_name(title, page_id)}.md"
-    content = page_frontmatter(title, page_id, version_number, source, markdown)
-    output_path.write_text(content, encoding="utf-8")
-
-    xml_entries, warnings = export_drawio_xml(
-        client=client,
-        references=references,
-        page_id=page_id,
-        temp_xml_dir=temp_xml_dir,
-        attachment_cache=attachment_cache,
-    )
-
-    if warnings and xml_entries:
-        status = "partial"
-    elif warnings and not xml_entries and references:
-        status = "failed"
-    else:
-        status = "succeeded"
-
-    return {
-        "title": title,
-        "status": status,
-        "pageId": page_id,
-        "version": version_number,
-        "source": source,
-        "markdownPath": str(output_path),
-        "tempXmlDir": str(temp_xml_dir),
-        "diagramCount": len(xml_entries),
-        "xmlFiles": [entry["xml"] for entry in xml_entries],
-        "xmlEntries": xml_entries,
-        "warnings": warnings,
-    }
-
-
 def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "processed": len(results),
@@ -1161,13 +884,278 @@ def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Export Markdown drafts and draw.io XML from bundle.json.",
+    )
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to the current working directory config.json.",
+    )
+    parser.add_argument(
+        "--bundle-json",
+        required=True,
+        help="Path to bundle.json, or '-' to read from stdin.",
+    )
+    parser.add_argument(
+        "--temp-root",
+        default=str(TEMP_ROOT),
+        help="Base temporary directory for exported draw.io XML.",
+    )
+    return parser.parse_args()
+
+
+def load_bundle(bundle_arg: str) -> dict[str, Any]:
+    raw = sys.stdin.read() if bundle_arg == "-" else Path(bundle_arg).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"invalid bundle JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ConfigError("bundle must be a JSON object")
+
+    payload["siteUrl"] = normalize_site_url(payload.get("siteUrl"), field_name="siteUrl")
+    pages = payload.get("pages")
+    if not isinstance(pages, list):
+        raise ConfigError("bundle pages must be an array")
+    payload["pages"] = pages
+    return payload
+
+
+def normalize_attachment(raw: dict[str, Any], owner_page_id: str) -> dict[str, Any]:
+    attachment_id = str(raw.get("id") or "").strip()
+    title = str(raw.get("title") or "").strip()
+    media_type = str(media_type_of_attachment(raw) or "").strip()
+    download_path = download_path_of_attachment(raw)
+
+    if not attachment_id or not title:
+        raise ConfigError(f"attachment metadata is missing id or title for owner page {owner_page_id}")
+    if not media_type:
+        raise ConfigError(f"attachment metadata is missing mediaType for owner page {owner_page_id}")
+    if not download_path:
+        raise ConfigError(
+            f"attachment metadata is missing download link for owner page {owner_page_id}"
+        )
+
+    normalized = dict(raw)
+    normalized["id"] = attachment_id
+    normalized["title"] = title
+    normalized["ownerPageId"] = owner_page_id
+    normalized["_links"] = {"download": download_path}
+    normalized["metadata"] = {"mediaType": media_type}
+    return normalized
+
+
+def normalize_attachments_by_page(page_payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    raw_index = page_payload.get("attachmentsByPageId")
+    if not isinstance(raw_index, dict):
+        raise ConfigError("attachmentsByPageId must be an object keyed by owner page id")
+
+    attachments_by_page: dict[str, list[dict[str, Any]]] = {}
+    for owner_page_id, attachments in raw_index.items():
+        if not isinstance(attachments, list):
+            raise ConfigError(f"attachmentsByPageId[{owner_page_id}] must be an array")
+        owner_key = str(owner_page_id).strip()
+        if not owner_key:
+            raise ConfigError("attachmentsByPageId contains an empty owner page id")
+        attachments_by_page[owner_key] = [
+            normalize_attachment(item, owner_key) for item in attachments if isinstance(item, dict)
+        ]
+    return attachments_by_page
+
+
+def normalize_page(page_payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(page_payload, dict):
+        raise ConfigError("each page entry must be an object")
+
+    title = str(page_payload.get("title") or "").strip()
+    page_id = str(page_payload.get("pageId") or page_payload.get("id") or "").strip()
+    source_url = str(page_payload.get("sourceUrl") or page_payload.get("source") or "").strip()
+    storage = page_payload.get("storage")
+    version = page_payload.get("version")
+
+    if not title or not page_id:
+        raise ConfigError("each page entry must include title and pageId")
+    if not isinstance(storage, str) or not storage.strip():
+        raise ConfigError(f"page '{title}' is missing storage content")
+    if not source_url:
+        raise ConfigError(f"page '{title}' is missing sourceUrl")
+
+    version_number = int((version.get("number") if isinstance(version, dict) else version) or 0)
+
+    return {
+        "title": title,
+        "pageId": page_id,
+        "version": version_number,
+        "sourceUrl": source_url,
+        "storage": storage,
+        "attachmentsByPageId": normalize_attachments_by_page(page_payload),
+    }
+
+
+def index_bundle_pages(bundle: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    for page_payload in bundle["pages"]:
+        page = normalize_page(page_payload)
+        if page["title"] in indexed:
+            raise ConfigError(f"duplicate page title in bundle: {page['title']}")
+        indexed[page["title"]] = page
+    return indexed
+
+
+def export_drawio_xml_from_bundle(
+    *,
+    client: ConfluenceClient,
+    site_url: str,
+    references: list[Any],
+    page_id: str,
+    attachments_by_page: dict[str, list[dict[str, Any]]],
+    temp_xml_dir: Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    saved: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    processed_attachment_ids: set[str] = set()
+
+    if references:
+        reference_items = references
+    else:
+        reference_items = []
+        for attachment in find_fallback_drawio_attachments(attachments_by_page.get(page_id, [])):
+            title = str(attachment.get("title") or "diagram")
+            reference_items.append(
+                {
+                    "diagram_name": title,
+                    "owner_page_id": page_id,
+                    "source": "attachment-fallback",
+                }
+            )
+
+    for reference in reference_items:
+        diagram_name = (
+            reference.diagram_name if hasattr(reference, "diagram_name") else reference["diagram_name"]
+        )
+        owner_page_id = (
+            reference.owner_page_id if hasattr(reference, "owner_page_id") else reference["owner_page_id"]
+        ) or page_id
+        source = reference.source if hasattr(reference, "source") else reference["source"]
+
+        attachments = attachments_by_page.get(owner_page_id, [])
+        attachment = find_matching_attachment(attachments, diagram_name)
+        if attachment is None:
+            warnings.append(
+                f"diagram attachment not found for '{diagram_name}' "
+                f"(ownerPageId={owner_page_id}, source={source})"
+            )
+            continue
+
+        attachment_id = str(attachment.get("id") or "")
+        if not attachment_id or attachment_id in processed_attachment_ids:
+            continue
+
+        download_path = download_path_of_attachment(attachment)
+        if not download_path:
+            warnings.append(
+                f"attachment download link missing for '{diagram_name}' "
+                f"(ownerPageId={owner_page_id})"
+            )
+            continue
+
+        attachment_title = str(attachment.get("title") or diagram_name)
+        filename = normalized_xml_filename(
+            diagram_name="diagram" if source == "attachment-fallback" else diagram_name,
+            attachment_title=attachment_title,
+        )
+        output_path = unique_output_path(temp_xml_dir / filename)
+        content = client.download_attachment(download_path)
+        ensure_xml_content(content, attachment_title)
+        output_path.write_bytes(content)
+        processed_attachment_ids.add(attachment_id)
+        saved.append(
+            {
+                "diagramName": diagram_name,
+                "diagramSlug": mermaid_slug(
+                    Path(attachment_title).stem if source == "attachment-fallback" else diagram_name
+                ),
+                "attachmentTitle": str(attachment.get("title") or ""),
+                "attachmentId": attachment_id,
+                "ownerPageId": owner_page_id,
+                "downloadUrl": build_attachment_download_url(site_url, attachment),
+                "path": str(output_path),
+                "xml": output_path.name,
+                "source": source,
+            }
+        )
+
+    if not references and not saved:
+        warnings.append("no draw.io references or matching draw.io attachments found")
+    return saved, warnings
+
+
+def process_page(
+    *,
+    client: ConfluenceClient,
+    page: dict[str, Any],
+    config: Any,
+    site_url: str,
+    temp_root: Path,
+) -> dict[str, Any]:
+    references = DrawioReferenceExtractor().extract(page["storage"])
+    temp_xml_dir = temp_root / page_directory_name(page["title"], page["pageId"])
+    clean_temp_dir(temp_xml_dir)
+
+    markdown = StorageToMarkdownConverter(references).convert(page["storage"])
+    output_path = config.output_dir / f"{markdown_output_name(page['title'], page['pageId'])}.md"
+    output_path.write_text(
+        page_frontmatter(
+            page["title"],
+            page["pageId"],
+            page["version"],
+            page["sourceUrl"],
+            markdown,
+        ),
+        encoding="utf-8",
+    )
+
+    xml_entries, warnings = export_drawio_xml_from_bundle(
+        client=client,
+        site_url=site_url,
+        references=references,
+        page_id=page["pageId"],
+        attachments_by_page=page["attachmentsByPageId"],
+        temp_xml_dir=temp_xml_dir,
+    )
+
+    if warnings and xml_entries:
+        status = "partial"
+    elif warnings and references:
+        status = "failed"
+    else:
+        status = "succeeded"
+
+    return {
+        "title": page["title"],
+        "status": status,
+        "pageId": page["pageId"],
+        "version": page["version"],
+        "source": page["sourceUrl"],
+        "markdownPath": str(output_path),
+        "tempXmlDir": str(temp_xml_dir),
+        "diagramCount": len(xml_entries),
+        "xmlFiles": [entry["xml"] for entry in xml_entries],
+        "xmlEntries": xml_entries,
+        "warnings": warnings,
+    }
+
+
 def main() -> int:
     try:
         args = parse_args()
         config = load_config(args.config)
-        site_url = normalize_site_url(args.site_url, field_name="--site-url")
+        bundle = load_bundle(args.bundle_json)
         email, token = require_credentials()
-    except (ConfigError, OSError) as exc:
+        pages_by_title = index_bundle_pages(bundle)
+    except (ConfigError, OSError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
 
@@ -1175,33 +1163,25 @@ def main() -> int:
     temp_root = Path(args.temp_root).expanduser()
     temp_root.mkdir(parents=True, exist_ok=True)
 
-    client = ConfluenceClient(confluence_base_url(site_url), email, token)
-    extractor = DrawioReferenceExtractor()
-    attachment_cache: dict[str, list[dict[str, Any]]] = {}
+    client = ConfluenceClient(confluence_base_url(bundle["siteUrl"]), email, token)
     results: list[dict[str, Any]] = []
 
-    try:
-        for title in config.titles:
-            try:
-                results.append(
-                    process_title(
-                        client=client,
-                        extractor=extractor,
-                        config=config,
-                        site_url=site_url,
-                        title=title,
-                        temp_root=temp_root,
-                        attachment_cache=attachment_cache,
-                    )
+    for title in config.titles:
+        try:
+            page = pages_by_title.get(title)
+            if page is None:
+                raise ConfigError(f"bundle is missing page for configured title: {title}")
+            results.append(
+                process_page(
+                    client=client,
+                    page=page,
+                    config=config,
+                    site_url=bundle["siteUrl"],
+                    temp_root=temp_root,
                 )
-            except PageProcessingError as exc:
-                results.append({"title": title, "status": "failed", "reason": str(exc)})
-    except FatalConfluenceError as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
-        return 1
-    except OSError as exc:
-        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
-        return 1
+            )
+        except (ConfigError, PageProcessingError, OSError, ValueError) as exc:
+            results.append({"title": title, "status": "failed", "reason": str(exc)})
 
     summary = build_summary(results)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
